@@ -6,6 +6,7 @@ on:
       - "src/app/api/qr/**"
       - "src/components/WeighingWorkspace.tsx"
       - "tests/lps-qr-identity.test.mjs"
+      - "tests/lps-qr-e2e.mjs"
       - "package.json"
       - ".github/workflows/lps-qr-compat.yml"
   workflow_dispatch:
@@ -14,6 +15,20 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: timbangqr_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d timbangqr_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -24,3 +39,7 @@ jobs:
       - run: npm run test:qr
       - run: npm run typecheck
       - run: npm run build
+      - name: Real API & isolated PostgreSQL weighing E2E
+        run: node tests/lps-qr-e2e.mjs
+        env:
+          E2E_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/timbangqr_ci
