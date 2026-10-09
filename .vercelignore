@@ -1,0 +1,27 @@
+# Vercel Ignore File
+# Local python & OCR models/datasets (these run on local operator PC, not serverless)
+*.traineddata
+*.pt
+crop_media*.png
+hasil_opencv_*.png
+debug_yolo_outputs/
+seven_seg_repo/
+models/
+cloudflared.exe
+
+# Local desktop bridge output
+bridge-desktop/dist/
+
+# Local database files & logs
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/sqlite-export.json
+backups/
+*.log
+*.tsbuildinfo
+.DS_Store
+
+# Environment files
+.env*
+!.env.example

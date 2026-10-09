@@ -1,0 +1,20 @@
+TimbangQR Bridge Win7 x86 v5 Production
+
+1. Extract seluruh isi ZIP ke folder lokal, misalnya C:\TimbangQR-Bridge.
+2. Buka folder "TimbangQR Bridge Win7 x86".
+3. Jalankan "TimbangQR Bridge.exe".
+4. Isi konfigurasi berikut:
+   URL API TimbangQR : https://timbangqr-harapan-jaya.vercel.app/api/serial/ingest
+   ID Perangkat      : TIMBANG-HJ-SERIAL-01
+   Serial API Key    : nilai SERIAL_API_KEY dari Vercel TimbangQR
+   Bridge Admin Key  : kosongkan
+5. Pilih COM1, baud rate 9600, lalu klik "Hubungkan timbangan".
+
+Pemeriksaan berhasil:
+- Status connected bernilai true.
+- bridge.ingestUrl menampilkan URL Vercel di atas.
+- lastError kosong setelah data berhasil terkirim.
+- queueLength turun sampai 0.
+
+Jangan jalankan Bridge versi lama bersamaan. Versi ini menggantikan endpoint lama
+127.0.0.1:3000 dengan endpoint Vercel Production.
