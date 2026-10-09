@@ -88,6 +88,8 @@ export async function linkVerifiedLpsArmada(armada: LpsArmada): Promise<Resolved
     }
     if (!vehicle) throw new LpsQrError("Gagal menyinkronkan master kendaraan.", 500);
 
+    // Nama LPS juga dilock: dua armada baru dari LPS sama tidak bersaing INSERT.
+    await client.query("SELECT pg_advisory_xact_lock(418, hashtext($1))", [normalizeLpsName(armada.namaLps)]);
     const lpsRows = (await client.query<LpsRecord>(
       "SELECT id, name, active FROM lps ORDER BY id",
     )).rows.filter((item) => normalizeLpsName(item.name) === normalizeLpsName(armada.namaLps));
@@ -122,9 +124,14 @@ export async function linkVerifiedLpsArmada(armada: LpsArmada): Promise<Resolved
       throw new LpsQrError("Ditemukan beberapa relasi armada-LPS. Perbaiki data master dahulu.", 409);
     }
     if (existing[0]) {
+      // Saat mengaktifkan relasi lama, jangan melanggar primary unik kendaraan.
+      const primaryForOtherLps = (await client.query<{ exists: boolean }>(
+        "SELECT EXISTS (SELECT 1 FROM vehicle_assignments WHERE vehicle_id = $1 AND lps_id <> $2 AND active = TRUE AND is_primary = TRUE) AS exists",
+        [vehicle.id, lps.id],
+      )).rows[0]?.exists ?? false;
       await client.query(
-        "UPDATE vehicle_assignments SET active = TRUE, driver_name = COALESCE($2, driver_name) WHERE id = $1",
-        [existing[0].id, armada.namaSupir],
+        "UPDATE vehicle_assignments SET active = TRUE, is_primary = CASE WHEN $3 THEN FALSE ELSE is_primary END, driver_name = COALESCE($2, driver_name) WHERE id = $1",
+        [existing[0].id, armada.namaSupir, primaryForOtherLps],
       );
     } else {
       const primaryExists = (await client.query<{ exists: boolean }>(
