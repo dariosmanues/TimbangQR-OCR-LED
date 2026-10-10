@@ -121,6 +121,103 @@ try {
   assert.equal(legacy.data.vehicle.plate_number, "BM 8106 QP");
   assert.equal(totalLpsLookups, 0, "QR lama tidak boleh memanggil LPS");
 
+  // Actual operational QR printed for BM 8264 QM: this is ARMADA- prefix,
+  // not the unrelated LPS-BM8081TT fixture used in earlier tests.
+  const operational = await callApi("/api/qr/ARMADA-BM8264QM", { cookie });
+  assert.equal(operational.response.status, 200, JSON.stringify(operational.data));
+  assert.equal(operational.data.source, "ARMADA");
+  assert.equal(operational.data.vehicle.plate_normalized, "BM8264QM");
+  assert.equal(operational.data.vehicle.plate_number, "BM 8264 QM");
+  assert.equal(operational.data.assignments[0].lps_name.toUpperCase(), "BERSERI CINTA RAJA");
+  assert.equal(operational.data.masterCreated, true);
+  assert.ok(operational.data.assignments[0].lps_id > 0);
+
+  const operationalAgain = await callApi("/api/qr/ARMADA-BM8264QM", { cookie });
+  assert.equal(operationalAgain.response.status, 200, JSON.stringify(operationalAgain.data));
+  assert.equal(operationalAgain.data.masterCreated, false);
+  assert.equal(operationalAgain.data.vehicle.id, operational.data.vehicle.id);
+  const operationalCount = await pool.query(
+    "SELECT (SELECT COUNT(*)::int FROM vehicles WHERE plate_normalized='BM8264QM') AS vehicle_count, (SELECT COUNT(*)::int FROM vehicle_assignments WHERE vehicle_id=$1) AS assignment_count",
+    [operational.data.vehicle.id]
+  );
+  assert.equal(operationalCount.rows[0].vehicle_count, 1);
+  assert.equal(operationalCount.rows[0].assignment_count, 1);
+  assert.equal(totalLpsLookups, 0, "ARMADA QR must resolve from local verified master, not wrong LPS token");
+
+  // A complete workflow also creates a weighing ticket for this actual QR format
+  // ONLY inside the disposable PostgreSQL database named timbangqr_ci.
+  const operationalSave = await callApi("/api/weighings", {
+    cookie,
+    method: "POST",
+    body: {
+      vehicleId: operational.data.vehicle.id,
+      lpsId: operational.data.assignments[0].lps_id,
+      driverName: "PENGEMUDI UJI",
+      grossKg: 1280,
+      tareKg: 400,
+      rafaksiKg: 0,
+      tareSource: "MANUAL",
+      measurementSource: "OCR_LED",
+      ocrStable: true,
+      indicatorRaw: "OCR_LED:TEST:1280",
+    },
+  });
+  assert.equal(operationalSave.response.status, 201, JSON.stringify(operationalSave.data));
+  assert.equal(operationalSave.data.netto2Kg, 880);
+  const persistedOperational = await pool.query(
+    "SELECT plate_number, lps_name, netto_2_kg FROM weighings WHERE id=$1",
+    [operationalSave.data.id]
+  );
+  assert.equal(persistedOperational.rows[0].plate_number, "BM 8264 QM");
+  assert.equal(persistedOperational.rows[0].lps_name.toUpperCase(), "BERSERI CINTA RAJA");
+  assert.equal(persistedOperational.rows[0].netto_2_kg, 880);
+
+  // Exhaustive fleet test: every row in the actual Harapan Jaya Oct 2026
+  // registry must open via its printed ARMADA-{normalized plate} code.
+  const fleet = JSON.parse(await fs.readFile(
+    path.resolve("data/master_armada_harapan_jaya_okt2026.json"), "utf8"
+  ));
+  assert.equal(fleet.length, 68, "Fleet registry has changed: re-audit QR coverage.");
+  const grouped = new Map();
+  for (const row of fleet) {
+    const group = grouped.get(row.plate_normalized) || [];
+    group.push(row);
+    grouped.set(row.plate_normalized, group);
+  }
+  assert.equal(grouped.size, 67, "Unexpected plate duplication in fleet master.");
+  let tested = 0;
+  for (const row of fleet) {
+    const lookup = "/api/qr/ARMADA-" + row.plate_normalized;
+    const lookupResult = await callApi(lookup, { cookie });
+    assert.equal(lookupResult.response.status, 200,
+      "QR read failed for " + row.nomor_polisi + ": " + JSON.stringify(lookupResult.data));
+    const duplicate = grouped.get(row.plate_normalized).length > 1;
+    if (duplicate) {
+      assert.equal(lookupResult.data.requiresSelection, true);
+      assert.equal(lookupResult.data.choices.length, grouped.get(row.plate_normalized).length);
+    } else {
+      assert.equal(lookupResult.data.source, "ARMADA");
+      assert.equal(lookupResult.data.vehicle.plate_normalized, row.plate_normalized);
+    }
+    const choice = duplicate
+      ? await callApi(lookup + "?masterNo=" + row.no, { cookie })
+      : lookupResult;
+    assert.equal(choice.response.status, 200,
+      "Master mapping failed for izin #" + row.no + ": " + JSON.stringify(choice.data));
+    assert.equal(choice.data.vehicle.plate_normalized, row.plate_normalized);
+    assert.equal(choice.data.assignments[0].lps_name.toUpperCase(), row.nama_lps.toUpperCase());
+    assert.equal(choice.data.selectedMasterNo, row.no);
+    assert.ok(choice.data.vehicle.id && choice.data.assignments[0].lps_id);
+    tested++;
+  }
+  assert.equal(tested, fleet.length);
+  const duplicateA = await callApi("/api/qr/ARMADA-BM9601TZ?masterNo=16", { cookie });
+  const duplicateB = await callApi("/api/qr/ARMADA-BM9601TZ?masterNo=34", { cookie });
+  assert.notEqual(duplicateA.data.vehicle.id, duplicateB.data.vehicle.id,
+    "Duplicate plate permits must not share one vehicle ID.");
+  assert.notEqual(duplicateA.data.assignments[0].lps_id, duplicateB.data.assignments[0].lps_id);
+  console.log("ALL_HARAPAN_JAYA_QR_PASS: 68 of 68 active master records, 67 unique plates, 2 duplicate-plate permit choices.");
+
   // Real LPS QR payload -> mock LPS master -> local master mapping.
   const scan = await callApi("/api/qr/" + encodeURIComponent(code), { cookie });
   assert.equal(scan.response.status, 200, JSON.stringify(scan.data));
@@ -184,7 +281,7 @@ try {
   // A fake suffix must not silently degrade to license-plate-only matching.
   const forged = await callApi("/api/qr/LPS-BM8081TT-9999999999999", { cookie });
   assert.equal(forged.response.status, 404);
-  console.log("E2E PASS: legacy QR + LPS QR + master linkage + persisted test weighing + tampering rejection.");
+  console.log("E2E PASS: operational ARMADA-BM8264QM + legacy QR + LPS QR + two persisted staging tickets.");
 } finally {
   if (nextProcess?.pid) {
     try { process.kill(-nextProcess.pid, "SIGTERM"); } catch { nextProcess.kill("SIGTERM"); }

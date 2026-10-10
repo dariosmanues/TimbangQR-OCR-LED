@@ -9,6 +9,8 @@ on:
       - "tests/lps-qr-e2e.mjs"
       - "tests/qr-token.test.mjs"
       - "src/lib/qr-token.ts"
+      - "src/lib/legacy-armada-qr.ts"
+      - "data/master_armada_harapan_jaya_okt2026.json"
       - "src/components/QrScanner.tsx"
       - "scripts/verify-lps-production.ts"
       - "package.json"
