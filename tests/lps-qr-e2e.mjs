@@ -132,6 +132,15 @@ try {
   assert.ok(scan.data.assignments[0].lps_id > 0);
   assert.ok(scan.data.vehicle.id > 0);
 
+  // Scanner may receive the LPS API URL rather than the opaque QR text.
+  // Backend must recover the code= parameter and preserve the LPS path.
+  const wrappedUrl = "https://lps-app-iota.vercel.app/api/qr-generator?code=" + code + "&format=svg";
+  const urlScan = await callApi("/api/qr/" + encodeURIComponent(wrappedUrl), { cookie });
+  assert.equal(urlScan.response.status, 200, JSON.stringify(urlScan.data));
+  assert.equal(urlScan.data.vehicle.plate_normalized, "BM8081TT");
+  assert.equal(urlScan.data.lpsVerified, true);
+  assert.equal(urlScan.data.masterCreated, false);
+
   // Re-scan never duplicates masters/assignments.
   const rescan = await callApi("/api/qr/" + encodeURIComponent(code), { cookie });
   assert.equal(rescan.response.status, 200);
