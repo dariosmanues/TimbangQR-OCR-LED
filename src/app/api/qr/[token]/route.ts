@@ -13,7 +13,7 @@ import type { AssignmentRow, VehicleRow } from "@/lib/types";
 
 export const runtime = "nodejs";
 
-export async function GET(_: Request, { params }: { params: Promise<{ token: string }> }) {
+export async function GET(request: Request, { params }: { params: Promise<{ token: string }> }) {
   const user = await getSession();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const { token } = await params;
@@ -47,7 +47,12 @@ export async function GET(_: Request, { params }: { params: Promise<{ token: str
       return NextResponse.json({ error: "Format QR ARMADA tidak dikenali." }, { status: 422 });
     }
     try {
-      const record = await resolveLegacyArmadaQr(legacyPlate);
+      const choice = new URL(request.url).searchParams.get("masterNo");
+      const selectedNo = choice ? Number(choice) : undefined;
+      if (choice && (!Number.isSafeInteger(selectedNo) || (selectedNo ?? 0) < 1)) {
+        return NextResponse.json({ error: "Pilihan izin armada tidak valid." }, { status: 422 });
+      }
+      const record = await resolveLegacyArmadaQr(legacyPlate, selectedNo);
       return NextResponse.json(record, { headers: { "Cache-Control": "private, no-store" } });
     } catch (error) {
       if (error instanceof LpsQrError) {
