@@ -22,7 +22,7 @@
     "bridge:dev": "electron bridge-desktop/main.cjs",
     "bridge:build": "electron-builder --win nsis --publish never",
     "bridge:build:win7-x86": "electron-builder --win portable --ia32 --publish never",
-    "test:qr": "node --experimental-strip-types --test tests/lps-qr-identity.test.mjs"
+    "test:qr": "node --experimental-strip-types --test tests/lps-qr-identity.test.mjs tests/qr-token.test.mjs"
   },
   "dependencies": {
     "@zxing/browser": "0.1.5",
