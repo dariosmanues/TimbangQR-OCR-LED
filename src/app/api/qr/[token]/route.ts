@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
 import { dbOne, dbQuery } from "@/lib/db";
+import { tokenFromValue } from "@/lib/qr-token";
 import {
   fetchVerifiedLpsArmada,
   linkVerifiedLpsArmada,
@@ -16,7 +17,24 @@ export async function GET(_: Request, { params }: { params: Promise<{ token: str
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const { token } = await params;
 
-  const rawToken = decodeURIComponent(token).trim();
+  // Next.js decodes route params. URLs pasted directly into the scan page
+  // still need extracting; scanner upload/camera use the same pure parser.
+  const rawToken = tokenFromValue(token);
+  if (!rawToken || rawToken.length > 512) {
+    return NextResponse.json({ error: "Nilai QR kosong atau terlalu panjang." }, { status: 400 });
+  }
+  if (/^https?:\/\//i.test(rawToken)) {
+    return NextResponse.json({
+      error: "QR berisi URL yang tidak memiliki parameter kode armada (code/qrCode/token).",
+    }, { status: 422 });
+  }
+  // Never silently downgrade a malformed LPS QR to the legacy vehicle DB.
+  // That downgrade previously reported "QR armada tidak valid" with no clue.
+  if (/^LPS(?:-|$)/i.test(rawToken) && !parseLpsQrToken(rawToken)) {
+    return NextResponse.json({
+      error: "Format kode QR LPS tidak dikenali. Pindai ulang QR yang diterbitkan aplikasi LPS.",
+    }, { status: 422 });
+  }
 
   // QR LPS wajib divalidasi secara server-to-server, termasuk jika pernah
   // tersimpan di master lokal. QR LPS yang dicabut tidak boleh diterima.
