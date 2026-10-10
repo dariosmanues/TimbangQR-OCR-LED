@@ -251,7 +251,25 @@ export default function WeighingWorkspace({ initialToken = "" }: { initialToken?
           {!payload ? (
             <div className="empty">
               <Truck size={38} style={{ opacity: .35 }} />
-              <p>{loadingVehicle ? "Memuat data armada..." : message || "Pindai QR untuk membuka data armada."}</p>
+              {message && (message.includes("hangus") || message.includes("gagal") || message.includes("tidak") || message.includes("Error")) ? (
+                <div style={{
+                  background: "rgba(239, 68, 68, 0.12)",
+                  border: "1px solid rgba(239, 68, 68, 0.4)",
+                  color: "#ef4444",
+                  padding: "12px 16px",
+                  borderRadius: 8,
+                  marginTop: 12,
+                  maxWidth: 500,
+                  fontSize: 14,
+                  lineHeight: 1.5,
+                  fontWeight: 500,
+                  textAlign: "center"
+                }}>
+                  ⚠️ {message}
+                </div>
+              ) : (
+                <p>{loadingVehicle ? "Memuat data armada..." : message || "Pindai QR untuk membuka data armada."}</p>
+              )}
               {armadaChoices.length > 0 && (
                 <div style={{ display: "grid", gap: 8, marginTop: 16, width: "100%", maxWidth: 480 }}>
                   {armadaChoices.map(choice => (

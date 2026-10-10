@@ -36,7 +36,7 @@ export async function fetchVerifiedLpsArmada(identity: LpsIdentity): Promise<Lps
     } catch {}
     if (errBody?.burned || errBody?.message?.includes("hangus")) {
       throw new LpsQrError(
-        errBody.message || "QR Code ini sudah hangus (sudah pernah digunakan untuk transaksi penimbangan). Silakan generate QR ulang di aplikasi LPS.",
+        errBody.message || "QR Code ini sudah hangus (sudah pernah digunakan untuk transaksi tiket #...). Silakan Hubungi Ketua Atau Pengurus LPS Anda .",
         400,
       );
     }

@@ -58,7 +58,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ toke
 
     if (burnedCheck) {
       return NextResponse.json({
-        error: `QR Code ini sudah hangus (sudah pernah digunakan untuk transaksi tiket #${burnedCheck.ticket_number}). Silakan generate QR ulang di aplikasi LPS (https://lps-app-iota.vercel.app/lps/qr-generator).`,
+        error: `QR Code ini sudah hangus (sudah pernah digunakan untuk transaksi tiket #${burnedCheck.ticket_number}). Silakan Hubungi Ketua Atau Pengurus LPS Anda .`,
         burned: true,
         ticketNumber: burnedCheck.ticket_number,
       }, { status: 400 });
