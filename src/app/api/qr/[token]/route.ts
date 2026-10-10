@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
 import { dbOne, dbQuery } from "@/lib/db";
 import { tokenFromValue } from "@/lib/qr-token";
+import { parseLegacyArmadaQr, resolveLegacyArmadaQr } from "@/lib/legacy-armada-qr";
 import {
   fetchVerifiedLpsArmada,
   linkVerifiedLpsArmada,
@@ -34,6 +35,27 @@ export async function GET(_: Request, { params }: { params: Promise<{ token: str
     return NextResponse.json({
       error: "Format kode QR LPS tidak dikenali. Pindai ulang QR yang diterbitkan aplikasi LPS.",
     }, { status: 422 });
+  }
+
+  // Legacy QR labels generated for the operational Harapan Jaya fleet
+  // encode the plate as ARMADA-BM8264QM, not as LPS-{plate}-{nonce}.
+  // Cross-check against October master rather than looking up this literal
+  // prefix in vehicles.qr_token.
+  const legacyPlate = parseLegacyArmadaQr(rawToken);
+  if (/^ARMADA-/i.test(rawToken)) {
+    if (!legacyPlate) {
+      return NextResponse.json({ error: "Format QR ARMADA tidak dikenali." }, { status: 422 });
+    }
+    try {
+      const record = await resolveLegacyArmadaQr(legacyPlate);
+      return NextResponse.json(record, { headers: { "Cache-Control": "private, no-store" } });
+    } catch (error) {
+      if (error instanceof LpsQrError) {
+        return NextResponse.json({ error: error.message }, { status: error.status });
+      }
+      console.error("[ARMADA QR] Database mapping error:", error);
+      return NextResponse.json({ error: "Gagal memuat armada Harapan Jaya dari master." }, { status: 500 });
+    }
   }
 
   // QR LPS wajib divalidasi secara server-to-server, termasuk jika pernah
