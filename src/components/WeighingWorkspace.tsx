@@ -28,7 +28,7 @@ type VehiclePayload = {
   vehicle: Vehicle;
   assignments: Assignment[];
   lpsOptions: Array<{ id: number; name: string }>;
-  source?: "LPS";
+  source?: "LPS" | "ARMADA";
   lpsVerified?: boolean;
   masterCreated?: boolean;
 };
@@ -69,7 +69,9 @@ export default function WeighingWorkspace({ initialToken = "" }: { initialToken?
         ? (parsed.masterCreated
           ? "QR LPS berhasil diverifikasi. Master armada baru terdaftar; pastikan jenis armada dan isi tare sebelum menyimpan."
           : "QR LPS berhasil diverifikasi. Armada, LPS dan pengemudi tersambung.")
-        : "Data armada ditemukan.");
+        : parsed.source === "ARMADA"
+          ? "QR Armada Harapan Jaya dikenali. Nomor polisi dan LPS terhubung; lengkapi pengemudi serta tare jika belum tersedia."
+          : "Data armada ditemukan.");
     } catch (error) {
       setPayload(null);
       setMessage(error instanceof Error ? error.message : "Gagal membaca QR");
