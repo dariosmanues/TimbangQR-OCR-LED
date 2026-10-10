@@ -240,9 +240,13 @@ export default function QrScanner({ onToken }: { onToken: (token: string) => voi
                   return;
                 }
                 const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+                const customYolo = typeof window !== "undefined" ? localStorage.getItem("timbangqr_yolo_url") : null;
+                const qrHeaders: Record<string, string> = { "Content-Type": "application/json" };
+                if (customYolo) qrHeaders["x-yolo-url"] = customYolo;
+
                 const res = await fetch("/api/qr-decode", {
                   method: "POST",
-                  headers: { "Content-Type": "application/json" },
+                  headers: qrHeaders,
                   body: JSON.stringify({ image: dataUrl }),
                 });
                 if (res.ok) {
@@ -292,11 +296,30 @@ export default function QrScanner({ onToken }: { onToken: (token: string) => voi
       // Fallback: native browser image recognition.
       if (window.BarcodeDetector) {
         try {
+<<<<<<< HEAD
           const detector = new window.BarcodeDetector({ formats: ["qr_code"] });
           const found = await detector.detect(img);
           if (found[0]?.rawValue) {
             handleDetected(found[0].rawValue, "Foto Hardware");
             return;
+=======
+          const customYolo = typeof window !== "undefined" ? localStorage.getItem("timbangqr_yolo_url") : null;
+          const qrHeaders: Record<string, string> = { "Content-Type": "application/json" };
+          if (customYolo) qrHeaders["x-yolo-url"] = customYolo;
+
+          const res = await fetch("/api/qr-decode", {
+            method: "POST",
+            headers: qrHeaders,
+            body: JSON.stringify({ image: dataUrl }),
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.success && data.text) {
+              setUploading(false);
+              handleDetected(data.text, "Foto/File");
+              return;
+            }
+>>>>>>> 793cbef (feat: support scanning LPS Harapan Jaya QR codes and enforce one-time use burned QR verification)
           }
         } catch {}
       }

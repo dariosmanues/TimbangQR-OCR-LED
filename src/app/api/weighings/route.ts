@@ -18,6 +18,7 @@ const schema = z.object({
   measurementSource: z.literal("OCR_LED"),
   ocrStable: z.literal(true),
   indicatorRaw: z.string().max(2000).optional().default(""),
+  qrToken: z.string().max(255).optional().default(""),
 });
 
 async function nextTicket(client: PoolClient) {
@@ -83,10 +84,12 @@ export async function POST(request: Request) {
         INSERT INTO weighings (
           ticket_number, weighed_at, vehicle_id, plate_number, driver_name, vehicle_type,
           lps_id, lps_name, waste_type, gross_kg, tare_kg, netto_1_kg, rafaksi_kg,
-          netto_2_kg, ritasi, tare_source, device_id, indicator_raw, status, source, created_by
+          netto_2_kg, ritasi, tare_source, device_id, indicator_raw, status, source, created_by,
+          qr_token
         ) VALUES (
           $1, $2::timestamptz, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-          $12, $13, $14, 1, $15, NULL, $16, 'COMPLETED', 'OCR_LED', $17
+          $12, $13, $14, 1, $15, NULL, $16, 'COMPLETED', 'OCR_LED', $17,
+          $18
         )
         RETURNING id
       `, [
@@ -107,8 +110,24 @@ export async function POST(request: Request) {
         input.tareSource,
         input.indicatorRaw || null,
         user.id,
+        input.qrToken?.trim() || null,
       ]);
       const id = inserted.rows[0].id;
+
+      // Catat token QR sebagai HANGUS agar tidak bisa discan/dipakai ulang
+      if (input.qrToken && input.qrToken.trim()) {
+        try {
+          await client.query(`
+            INSERT INTO burned_qr_tokens (qr_token, plate_number, ticket_number, vehicle_id, burned_at)
+            VALUES ($1, $2, $3, $4, NOW())
+            ON CONFLICT (qr_token) DO UPDATE SET
+              ticket_number = EXCLUDED.ticket_number,
+              burned_at = NOW()
+          `, [input.qrToken.trim(), vehicle.plate_number, ticket, vehicle.id]);
+        } catch (e) {
+          console.warn("[Weighings] Gagal mencatat burned_qr_tokens:", e);
+        }
+      }
 
       await client.query(`
         INSERT INTO audit_logs (user_id, action, entity_type, entity_id, new_data)
@@ -121,6 +140,7 @@ export async function POST(request: Request) {
         tareKg: input.tareKg,
         netto2Kg: netto2,
         measurementSource: input.measurementSource,
+        qrToken: input.qrToken || null,
       })]);
 
       return { id, ticket, netto2, weighedAt };
@@ -140,6 +160,7 @@ export async function POST(request: Request) {
       vehicleType: vehicle.vehicle_type,
       wasteType: vehicle.waste_type,
       indicatorRaw: input.indicatorRaw || undefined,
+      qrCode: input.qrToken || undefined,
     });
 
     return NextResponse.json({

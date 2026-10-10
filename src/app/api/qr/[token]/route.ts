@@ -20,27 +20,54 @@ export async function GET(request: Request, { params }: { params: Promise<{ toke
 
   // Next.js decodes route params. URLs pasted directly into the scan page
   // still need extracting; scanner upload/camera use the same pure parser.
-  const rawToken = tokenFromValue(token);
+  let rawToken = tokenFromValue(token);
   if (!rawToken || rawToken.length > 512) {
     return NextResponse.json({ error: "Nilai QR kosong atau terlalu panjang." }, { status: 400 });
   }
+
+  // Handle URL format if passed directly
   if (/^https?:\/\//i.test(rawToken)) {
-    return NextResponse.json({
-      error: "QR berisi URL yang tidak memiliki parameter kode armada (code/qrCode/token).",
-    }, { status: 422 });
-  }
-  // Never silently downgrade a malformed LPS QR to the legacy vehicle DB.
-  // That downgrade previously reported "QR armada tidak valid" with no clue.
-  if (/^LPS(?:-|$)/i.test(rawToken) && !parseLpsQrToken(rawToken)) {
-    return NextResponse.json({
-      error: "Format kode QR LPS tidak dikenali. Pindai ulang QR yang diterbitkan aplikasi LPS.",
-    }, { status: 422 });
+    try {
+      const u = new URL(rawToken);
+      const extracted =
+        u.searchParams.get("code") ||
+        u.searchParams.get("qrCode") ||
+        u.searchParams.get("token") ||
+        u.searchParams.get("plate") ||
+        u.searchParams.get("text") ||
+        rawToken;
+      rawToken = extracted.trim();
+    } catch {
+      // keep rawToken as is
+    }
   }
 
-  // Legacy QR labels generated for the operational Harapan Jaya fleet
-  // encode the plate as ARMADA-BM8264QM, not as LPS-{plate}-{nonce}.
-  // Cross-check against October master rather than looking up this literal
-  // prefix in vehicles.qr_token.
+  // 1. Cek apakah token QR ini SUDAH HANGUS di database lokal TimbangQR
+  // (pernah digunakan untuk transaksi penimbangan sebelumnya)
+  try {
+    const burnedCheck = await dbOne<{ ticket_number: string; burned_at: string }>(`
+      SELECT ticket_number, burned_at
+      FROM burned_qr_tokens
+      WHERE qr_token = $1
+      UNION ALL
+      SELECT ticket_number, weighed_at AS burned_at
+      FROM weighings
+      WHERE qr_token = $1
+      LIMIT 1
+    `, [rawToken]);
+
+    if (burnedCheck) {
+      return NextResponse.json({
+        error: `QR Code ini sudah hangus (sudah pernah digunakan untuk transaksi tiket #${burnedCheck.ticket_number}). Silakan generate QR ulang di aplikasi LPS (https://lps-app-iota.vercel.app/lps/qr-generator).`,
+        burned: true,
+        ticketNumber: burnedCheck.ticket_number,
+      }, { status: 400 });
+    }
+  } catch (err) {
+    console.warn("[QR Lookup] Pengecekan burned_qr_tokens lokal gagal:", err);
+  }
+
+  // 2. Format QR ARMADA legacy (ARMADA-BM8264QM)
   const legacyPlate = parseLegacyArmadaQr(rawToken);
   if (/^ARMADA-/i.test(rawToken)) {
     if (!legacyPlate) {
@@ -53,29 +80,34 @@ export async function GET(request: Request, { params }: { params: Promise<{ toke
         return NextResponse.json({ error: "Pilihan izin armada tidak valid." }, { status: 422 });
       }
       const record = await resolveLegacyArmadaQr(legacyPlate, selectedNo);
-      return NextResponse.json(record, { headers: { "Cache-Control": "private, no-store" } });
+      return NextResponse.json({
+        ...record,
+        qrToken: rawToken,
+      }, { headers: { "Cache-Control": "private, no-store" } });
     } catch (error) {
       if (error instanceof LpsQrError) {
-        return NextResponse.json({ error: error.message }, { status: error.status });
+        return NextResponse.json({ error: error.message, burned: error.status === 400 }, { status: error.status });
       }
       console.error("[ARMADA QR] Database mapping error:", error);
       return NextResponse.json({ error: "Gagal memuat armada Harapan Jaya dari master." }, { status: 500 });
     }
   }
 
-  // QR LPS wajib divalidasi secara server-to-server, termasuk jika pernah
-  // tersimpan di master lokal. QR LPS yang dicabut tidak boleh diterima.
+  // 3. QR LPS wajib divalidasi secara server-to-server ke aplikasi LPS
   const lpsIdentity = parseLpsQrToken(rawToken);
   if (lpsIdentity) {
     try {
       const remoteArmada = await fetchVerifiedLpsArmada(lpsIdentity);
       const result = await linkVerifiedLpsArmada(remoteArmada);
-      return NextResponse.json(result, {
+      return NextResponse.json({
+        ...result,
+        qrToken: rawToken,
+      }, {
         headers: { "Cache-Control": "private, no-store" },
       });
     } catch (error) {
       if (error instanceof LpsQrError) {
-        return NextResponse.json({ error: error.message }, { status: error.status });
+        return NextResponse.json({ error: error.message, burned: error.status === 400 }, { status: error.status });
       }
       console.error("[LPS QR] Tidak dapat menghubungkan master:", error);
       return NextResponse.json(
@@ -85,8 +117,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ toke
     }
   }
 
-  // Jalur lama tetap utuh untuk QR internal TimbangQR, nomor polisi, izin
-  // dan kode armada yang digunakan sebelum integrasi.
+  // 4. Jalur fallback untuk QR internal TimbangQR, nomor polisi, izin, dan kode armada
   const plateCompact = rawToken.toUpperCase().replace(/[^A-Z0-9]/g, "");
   const vehicle = await dbOne<VehicleRow>([
     "SELECT id, code, plate_number, plate_normalized, vehicle_type, waste_type,",
@@ -98,7 +129,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ toke
   ].join(" "), [rawToken, plateCompact]);
 
   if (!vehicle) {
-    return NextResponse.json({ error: "QR armada tidak valid atau sudah dinonaktifkan." }, { status: 404 });
+    return NextResponse.json(
+      { error: `QR armada (${rawToken}) tidak ditemukan atau belum terdaftar di sistem timbangan.` },
+      { status: 404 }
+    );
   }
 
   const assignments = await dbQuery<AssignmentRow>([
@@ -112,5 +146,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ toke
     "SELECT id, name FROM lps WHERE active = TRUE ORDER BY name"
   );
 
-  return NextResponse.json({ vehicle, assignments, lpsOptions });
+  return NextResponse.json({
+    vehicle,
+    assignments,
+    lpsOptions,
+    qrToken: rawToken,
+  });
 }

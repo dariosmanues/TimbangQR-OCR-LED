@@ -29,6 +29,18 @@ export async function fetchVerifiedLpsArmada(identity: LpsIdentity): Promise<Lps
   if (response.status === 404) {
     throw new LpsQrError("Kode QR tidak terdaftar dalam master armada LPS.", 404);
   }
+  if (response.status === 400) {
+    let errBody: any;
+    try {
+      errBody = await response.json();
+    } catch {}
+    if (errBody?.burned || errBody?.message?.includes("hangus")) {
+      throw new LpsQrError(
+        errBody.message || "QR Code ini sudah hangus (sudah pernah digunakan untuk transaksi penimbangan). Silakan generate QR ulang di aplikasi LPS.",
+        400,
+      );
+    }
+  }
   if (!response.ok) {
     throw new LpsQrError("Validasi ke API LPS gagal (HTTP " + response.status + ").", 502);
   }

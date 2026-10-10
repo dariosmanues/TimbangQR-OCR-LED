@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Camera, Crop, Eye, EyeOff, RefreshCw, RotateCcw, Cpu, CheckCircle2, Save } from "lucide-react";
+import { Camera, Crop, Eye, EyeOff, RefreshCw, RotateCcw, Cpu, CheckCircle2, Save, Settings, Link2, Copy, Check, X } from "lucide-react";
 import type { Worker } from "tesseract.js";
 
 export type LedWeightReading = {
@@ -403,31 +403,70 @@ export default function LedWeightScanner({
   const samplesRef = useRef<number[]>([]);
 
   // Mesin OCR
+  const DEFAULT_YOLO_TUNNEL_URL = "https://stainless-tolerance-cole-impact.trycloudflare.com";
   const [ocrEngine, setOcrEngine] = useState<OcrEngine>("yolo");
   const yoloBusyRef = useRef(false);
   const [yoloStatus, setYoloStatus] = useState<"checking" | "online" | "offline">("checking");
+  const [customYoloUrl, setCustomYoloUrl] = useState<string>(DEFAULT_YOLO_TUNNEL_URL);
+  const [showBridgeModal, setShowBridgeModal] = useState<boolean>(false);
+  const [bridgeInputUrl, setBridgeInputUrl] = useState<string>(DEFAULT_YOLO_TUNNEL_URL);
+  const [yoloLatency, setYoloLatency] = useState<number | null>(null);
+  const [testingBridge, setTestingBridge] = useState<boolean>(false);
+  const [bridgeFeedback, setBridgeFeedback] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [copiedLink, setCopiedLink] = useState(false);
   const [tesseractReady, setTesseractReady] = useState(false);
   const tesseractWorkerRef = useRef<Worker | null>(null);
   const tesseractBusyRef = useRef(false);
 
   // Status check untuk backend YOLO OCR
-  const checkYoloHealth = useCallback(async () => {
+  const checkYoloHealth = useCallback(async (overrideUrl?: string) => {
+    const target = overrideUrl !== undefined ? overrideUrl : customYoloUrl;
     try {
-      const res = await fetch("/api/ocr-yolo");
+      const startTime = performance.now();
+      const headers: Record<string, string> = {};
+      if (target) headers["x-yolo-url"] = target;
+      const query = target ? `?yoloUrl=${encodeURIComponent(target)}` : "";
+
+      const res = await fetch(`/api/ocr-yolo${query}`, { headers });
       const data = await res.json();
-      setYoloStatus(data?.online ? "online" : "offline");
+      const latency = Math.round(performance.now() - startTime);
+
+      if (data?.online) {
+        setYoloStatus("online");
+        setYoloLatency(latency);
+        return true;
+      } else {
+        setYoloStatus("offline");
+        setYoloLatency(null);
+        return false;
+      }
     } catch {
       setYoloStatus("offline");
+      setYoloLatency(null);
+      return false;
     }
-  }, []);
+  }, [customYoloUrl]);
 
-  // Otomatis gunakan SSOCR di Vercel/cloud (non-localhost) agar tidak memerlukan server Python
+  // Otomatis baca URL tunnel dari query parameter ?yolo_url= atau localStorage (Default ke Cloudflare Tunnel aktif)
   useEffect(() => {
     if (typeof window !== "undefined") {
-      const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
-      if (!isLocal) {
-        setOcrEngine("ssocr");
+      const params = new URLSearchParams(window.location.search);
+      const urlFromParam = params.get("yolo_url") || params.get("yoloUrl");
+      const saved = localStorage.getItem("timbangqr_yolo_url");
+
+      const activeUrl = (urlFromParam && urlFromParam.trim())
+        || (saved && saved.trim())
+        || DEFAULT_YOLO_TUNNEL_URL;
+
+      if (urlFromParam && urlFromParam.trim()) {
+        localStorage.setItem("timbangqr_yolo_url", urlFromParam.trim());
+      } else if (!saved) {
+        localStorage.setItem("timbangqr_yolo_url", DEFAULT_YOLO_TUNNEL_URL);
       }
+
+      setCustomYoloUrl(activeUrl);
+      setBridgeInputUrl(activeUrl);
+      setOcrEngine("yolo");
     }
   }, []);
 
@@ -671,15 +710,19 @@ export default function LedWeightScanner({
       yoloBusyRef.current = true;
       const base64 = canvas.toDataURL("image/jpeg", 0.85);
 
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (customYoloUrl) headers["x-yolo-url"] = customYoloUrl;
+
       fetch("/api/ocr-yolo", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           image: base64,
           configuredDigits: currentDigits,
           colorMode: currentMode,
           preprocess: true,
           engine: currentEngine,
+          yoloUrl: customYoloUrl || undefined,
         }),
       })
         .then(async (res) => {
@@ -687,7 +730,7 @@ export default function LedWeightScanner({
             const errData = await res.json().catch(() => ({}));
             if (errData?.online === false) {
               setYoloStatus("offline");
-              setMessage("Server OCR Python belum aktif. Jalankan: python scripts/yolo_ocr_server.py");
+              setMessage("Server OCR Python / Cloud Bridge belum aktif. Klik 'Atur Bridge URL' atau jalankan MULAI_YOLO_VERCEL.bat");
             }
             return;
           }
@@ -1115,8 +1158,9 @@ export default function LedWeightScanner({
           )}
         </div>
 
-        <div className="form-row compact-form" style={{ marginTop: 12 }}>
-          <div className="field">
+        {/* BARIS 1: Mesin OCR & Kamera Display */}
+        <div className="form-row compact-form" style={{ marginTop: 12, alignItems: "start" }}>
+          <div className="field" style={{ minWidth: 0 }}>
             <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
               <Cpu size={14} /> Mesin OCR
             </label>
@@ -1133,71 +1177,9 @@ export default function LedWeightScanner({
               <option value="ssocr">SSOCR Vision (Algoritma Filter Piksel)</option>
               <option value="tesseract">Tesseract.js Wasm (3rd-Party Open Source)</option>
             </select>
-            {(ocrEngine === "yolo" || ocrEngine === "sevenseg") && (
-              <div style={{ marginTop: 6, fontSize: 12, display: "flex", flexDirection: "column", gap: 4 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <span
-                    style={{
-                      display: "inline-block",
-                      width: 8,
-                      height: 8,
-                      borderRadius: "50%",
-                      backgroundColor: yoloStatus === "online" ? "#10b981" : "#ef4444",
-                    }}
-                  />
-                  <span style={{ color: yoloStatus === "online" ? "#047857" : "#b91c1c", fontWeight: 600 }}>
-                    {yoloStatus === "online"
-                      ? "Server OCR Python: Online (Port 5001)"
-                      : yoloStatus === "checking"
-                      ? "Memeriksa server OCR..."
-                      : "Server OCR Python: Offline"}
-                  </span>
-                </div>
-                {yoloStatus === "offline" && (
-                  <div style={{ background: "#fef2f2", border: "1px solid #fee2e2", borderRadius: 8, padding: "8px 10px", fontSize: 11, color: "#991b1b" }}>
-                    <span>Di cloud / Vercel, gunakan mesin bawaan browser: </span>
-                    <button
-                      type="button"
-                      onClick={() => setOcrEngine("ssocr")}
-                      style={{
-                        background: "#08784f",
-                        color: "white",
-                        border: "none",
-                        borderRadius: 4,
-                        padding: "3px 8px",
-                        fontSize: 11,
-                        fontWeight: 600,
-                        cursor: "pointer",
-                        marginLeft: 4,
-                        marginTop: 4,
-                      }}
-                    >
-                      Gunakan SSOCR Vision (Rekomendasi Web)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setOcrEngine("tesseract")}
-                      style={{
-                        background: "#4b5563",
-                        color: "white",
-                        border: "none",
-                        borderRadius: 4,
-                        padding: "3px 8px",
-                        fontSize: 11,
-                        fontWeight: 600,
-                        cursor: "pointer",
-                        marginLeft: 4,
-                        marginTop: 4,
-                      }}
-                    >
-                      Tesseract.js Wasm
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
           </div>
-          <div className="field">
+
+          <div className="field" style={{ minWidth: 0 }}>
             <label>Kamera display</label>
             <select
               className="select"
@@ -1216,7 +1198,261 @@ export default function LedWeightScanner({
               )}
             </select>
           </div>
-          <div className="field">
+        </div>
+
+        {/* STATUS & PENGATURAN YOLO CLOUD BRIDGE (SEJAJAR PENUH / FULL WIDTH - BEBAS OVERLAP) */}
+        {(ocrEngine === "yolo" || ocrEngine === "sevenseg") && (
+          <div
+            style={{
+              marginTop: 10,
+              padding: "10px 14px",
+              borderRadius: 10,
+              border: yoloStatus === "online" ? "1px solid #a7f3d0" : "1px solid #fee2e2",
+              background: yoloStatus === "online" ? "#f0fdf4" : "#fef2f2",
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+              boxSizing: "border-box",
+              width: "100%",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flex: "1 1 200px" }}>
+                <span
+                  style={{
+                    display: "inline-block",
+                    width: 10,
+                    height: 10,
+                    borderRadius: "50%",
+                    backgroundColor: yoloStatus === "online" ? "#10b981" : yoloStatus === "checking" ? "#f59e0b" : "#ef4444",
+                    boxShadow: yoloStatus === "online" ? "0 0 8px rgba(16,185,129,0.5)" : undefined,
+                    flexShrink: 0,
+                  }}
+                />
+                <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+                  <span style={{ color: yoloStatus === "online" ? "#047857" : yoloStatus === "checking" ? "#b45309" : "#b91c1c", fontWeight: 700, fontSize: 13 }}>
+                    {yoloStatus === "online"
+                      ? `Server YOLO Online (${yoloLatency !== null ? `${yoloLatency}ms` : "OK"})`
+                      : yoloStatus === "checking"
+                      ? "Memeriksa server OCR..."
+                      : "Server YOLO: Offline"}
+                  </span>
+                  <span style={{ fontSize: 11, color: "#64748b", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    Bridge: <code style={{ background: "rgba(0,0,0,0.05)", padding: "1px 5px", borderRadius: 4 }}>{customYoloUrl}</code>
+                  </span>
+                </div>
+              </div>
+
+              <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBridgeInputUrl(customYoloUrl);
+                    setShowBridgeModal(!showBridgeModal);
+                  }}
+                  className="btn outline"
+                  style={{ padding: "4px 10px", fontSize: 11, height: "auto", display: "flex", alignItems: "center", gap: 4, background: "white" }}
+                  title="Atur URL Tunnel / Cloud Bridge"
+                >
+                  <Settings size={12} />
+                  {showBridgeModal ? "Tutup" : "Ubah Bridge URL"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => checkYoloHealth()}
+                  className="btn outline"
+                  style={{ padding: "4px 8px", fontSize: 11, height: "auto", background: "white" }}
+                  title="Periksa Ulang Koneksi"
+                >
+                  <RefreshCw size={12} />
+                </button>
+              </div>
+            </div>
+
+            {/* Modal / Card Pengaturan Bridge URL */}
+            {showBridgeModal && (
+              <div
+                style={{
+                  background: "#ffffff",
+                  border: "1px solid #cbd5e1",
+                  borderRadius: 8,
+                  padding: 12,
+                  marginTop: 4,
+                  boxShadow: "0 4px 12px rgba(0,0,0,0.06)",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 8,
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <strong style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 4, color: "#1e293b" }}>
+                    <Link2 size={13} /> Pengaturan YOLO Cloud Bridge
+                  </strong>
+                  <button
+                    type="button"
+                    onClick={() => setShowBridgeModal(false)}
+                    style={{ border: "none", background: "transparent", cursor: "pointer", color: "#64748b" }}
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+
+                <p style={{ fontSize: 11, color: "#475569", margin: 0 }}>
+                  Masukkan URL Cloudflare Tunnel atau server Python lokal:
+                </p>
+
+                <div style={{ display: "flex", gap: 6 }}>
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder="https://xxx.trycloudflare.com atau http://127.0.0.1:5001"
+                    value={bridgeInputUrl}
+                    onChange={(e) => setBridgeInputUrl(e.target.value)}
+                    style={{ fontSize: 11, padding: "5px 8px", flex: 1 }}
+                  />
+                  <button
+                    type="button"
+                    className="btn primary"
+                    disabled={testingBridge}
+                    onClick={async () => {
+                      setTestingBridge(true);
+                      setBridgeFeedback(null);
+                      const cleaned = bridgeInputUrl.trim();
+                      const ok = await checkYoloHealth(cleaned);
+                      setTestingBridge(false);
+                      if (ok) {
+                        if (typeof window !== "undefined") {
+                          if (cleaned) localStorage.setItem("timbangqr_yolo_url", cleaned);
+                          else localStorage.removeItem("timbangqr_yolo_url");
+                        }
+                        setCustomYoloUrl(cleaned);
+                        setBridgeFeedback({ type: "success", text: "✓ Berhasil terhubung ke server YOLO!" });
+                      } else {
+                        setBridgeFeedback({
+                          type: "error",
+                          text: "Gagal terhubung. Pastikan server/tunnel aktif.",
+                        });
+                      }
+                    }}
+                    style={{ padding: "5px 12px", fontSize: 11, whiteSpace: "nowrap" }}
+                  >
+                    {testingBridge ? "Menguji..." : "Tes & Simpan"}
+                  </button>
+                </div>
+
+                {bridgeFeedback && (
+                  <div
+                    style={{
+                      fontSize: 11,
+                      padding: "4px 8px",
+                      borderRadius: 4,
+                      background: bridgeFeedback.type === "success" ? "#ecfdf5" : "#fef2f2",
+                      color: bridgeFeedback.type === "success" ? "#065f46" : "#991b1b",
+                    }}
+                  >
+                    {bridgeFeedback.text}
+                  </div>
+                )}
+
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 2 }}>
+                  <button
+                    type="button"
+                    className="btn outline"
+                    style={{ fontSize: 10, padding: "2px 6px", height: "auto" }}
+                    onClick={() => {
+                      setBridgeInputUrl(DEFAULT_YOLO_TUNNEL_URL);
+                    }}
+                  >
+                    Reset ke Default Tunnel
+                  </button>
+                  <button
+                    type="button"
+                    className="btn outline"
+                    style={{ fontSize: 10, padding: "2px 6px", height: "auto" }}
+                    onClick={() => {
+                      setBridgeInputUrl("http://127.0.0.1:5001");
+                    }}
+                  >
+                    Gunakan Lokal (127.0.0.1:5001)
+                  </button>
+                  {customYoloUrl && (
+                    <button
+                      type="button"
+                      className="btn outline"
+                      style={{ fontSize: 10, padding: "2px 6px", height: "auto", display: "flex", alignItems: "center", gap: 3 }}
+                      onClick={() => {
+                        if (typeof window !== "undefined") {
+                          const direct = `${window.location.origin}${window.location.pathname}?yolo_url=${encodeURIComponent(customYoloUrl)}`;
+                          navigator.clipboard.writeText(direct).then(() => {
+                            setCopiedLink(true);
+                            setTimeout(() => setCopiedLink(false), 2000);
+                          });
+                        }
+                      }}
+                    >
+                      {copiedLink ? <Check size={11} /> : <Copy size={11} />}
+                      {copiedLink ? "Link Tersalin!" : "Salin Link Cepat"}
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Pesan bantuan jika offline */}
+            {yoloStatus === "offline" && !showBridgeModal && (
+              <div style={{ background: "#fef2f2", border: "1px solid #fee2e2", borderRadius: 8, padding: "8px 10px", fontSize: 11, color: "#991b1b" }}>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                  ⚠️ Server AI YOLO belum terhubung
+                </div>
+                <div style={{ marginBottom: 6, color: "#7f1d1d" }}>
+                  1. Di PC timbangan, jalankan: <code style={{ background: "#fee2e2", padding: "1px 4px", borderRadius: 3, fontWeight: 700 }}>MULAI_YOLO_VERCEL.bat</code><br />
+                  2. Browser akan otomatis terbuka dengan link Cloud Bridge aktif.
+                </div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 4 }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBridgeInputUrl(customYoloUrl);
+                      setShowBridgeModal(true);
+                    }}
+                    style={{
+                      background: "#dc2626",
+                      color: "white",
+                      border: "none",
+                      borderRadius: 4,
+                      padding: "3px 8px",
+                      fontSize: 11,
+                      fontWeight: 600,
+                      cursor: "pointer",
+                    }}
+                  >
+                    ⚙️ Masukkan URL Tunnel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOcrEngine("ssocr")}
+                    style={{
+                      background: "#08784f",
+                      color: "white",
+                      border: "none",
+                      borderRadius: 4,
+                      padding: "3px 8px",
+                      fontSize: 11,
+                      fontWeight: 600,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Beralih ke SSOCR (Bawaan Browser)
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* BARIS 2: Pengaturan Warna, Sensitivitas, & Digit Display */}
+        <div className="form-row compact-form" style={{ marginTop: 12, alignItems: "start" }}>
+          <div className="field" style={{ minWidth: 0 }}>
             <label>Warna LED display</label>
             <select
               className="select"
@@ -1231,7 +1467,8 @@ export default function LedWeightScanner({
               <option value="auto">Semua Warna / LCD Kontras Tinggi</option>
             </select>
           </div>
-          <div className="field">
+
+          <div className="field" style={{ minWidth: 0 }}>
             <label>Sensitivitas filter</label>
             <select
               className="select"
@@ -1246,7 +1483,8 @@ export default function LedWeightScanner({
               <option value="anti_glare">Anti-Silau (Hilangkan pantulan tebal)</option>
             </select>
           </div>
-          <div className="field">
+
+          <div className="field" style={{ minWidth: 0 }}>
             <label>Jumlah digit display</label>
             <select
               className="select"

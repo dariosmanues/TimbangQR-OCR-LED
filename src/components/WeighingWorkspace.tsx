@@ -46,6 +46,7 @@ export default function WeighingWorkspace({ initialToken = "" }: { initialToken?
   const [tareKg, setTareKg] = useState("");
   const [rafaksiKg, setRafaksiKg] = useState("0");
   const [tareSource, setTareSource] = useState("DATABASE");
+  const [scannedQrToken, setScannedQrToken] = useState("");
   const [saving, setSaving] = useState(false);
   const [result, setResult] = useState<{ ticketNumber: string; netto2Kg: number } | null>(null);
 
@@ -69,6 +70,7 @@ export default function WeighingWorkspace({ initialToken = "" }: { initialToken?
       }
       const parsed = data as VehiclePayload;
       setToken(nextToken);
+      setScannedQrToken(data.qrToken || nextToken);
       setPayload(parsed);
       const primary = parsed.assignments[0];
       setLpsId(primary ? String(primary.lps_id) : "");
@@ -80,9 +82,10 @@ export default function WeighingWorkspace({ initialToken = "" }: { initialToken?
           : "QR LPS berhasil diverifikasi. Armada, LPS dan pengemudi tersambung.")
         : parsed.source === "ARMADA"
           ? "QR Armada Harapan Jaya dikenali. Nomor polisi dan LPS terhubung; lengkapi pengemudi serta tare jika belum tersedia."
-          : "Data armada ditemukan.");
+          : "✓ Data armada ditemukan & valid.");
     } catch (error) {
       setPayload(null);
+      setScannedQrToken("");
       setMessage(error instanceof Error ? error.message : "Gagal membaca QR");
     } finally {
       setLoadingVehicle(false);
@@ -178,12 +181,16 @@ export default function WeighingWorkspace({ initialToken = "" }: { initialToken?
           measurementSource: "OCR_LED",
           ocrStable: true,
           indicatorRaw: ocrReading?.raw || `OCR_LED:CONFIRMED:${currentGross}`,
+          qrToken: scannedQrToken || token,
         }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Transaksi gagal disimpan");
       setResult({ ticketNumber: data.ticketNumber, netto2Kg: data.netto2Kg });
-      setMessage("Transaksi berhasil disimpan.");
+      setMessage(`✓ Transaksi berhasil disimpan (Tiket #${data.ticketNumber}). QR Code telah hangus.`);
+      setScannedQrToken("");
+      setToken("");
+      setPayload(null);
       setGrossKg("");
       setRafaksiKg("0");
     } catch (error) {

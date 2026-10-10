@@ -1,8 +1,37 @@
 import { NextResponse } from "next/server";
 
-const YOLO_SERVER_URL = process.env.YOLO_OCR_URL || "http://127.0.0.1:5001";
-
 export const runtime = "nodejs";
+
+const DEFAULT_YOLO_URL = "https://width-frankfurt-recent-courtesy.trycloudflare.com";
+
+function resolveTargetUrl(request: Request, body?: { yoloUrl?: string }): string {
+  const headerUrl = request.headers.get("x-yolo-url");
+  if (headerUrl && headerUrl.trim()) {
+    return cleanUrl(headerUrl);
+  }
+
+  try {
+    const urlObj = new URL(request.url);
+    const queryUrl = urlObj.searchParams.get("yoloUrl") || urlObj.searchParams.get("url");
+    if (queryUrl && queryUrl.trim()) {
+      return cleanUrl(queryUrl);
+    }
+  } catch {}
+
+  if (body?.yoloUrl && typeof body.yoloUrl === "string" && body.yoloUrl.trim()) {
+    return cleanUrl(body.yoloUrl);
+  }
+
+  return cleanUrl(process.env.YOLO_OCR_URL || DEFAULT_YOLO_URL);
+}
+
+function cleanUrl(raw: string): string {
+  let u = raw.trim().replace(/\/+$/, "");
+  if (!u.startsWith("http://") && !u.startsWith("https://")) {
+    u = `http://${u}`;
+  }
+  return u;
+}
 
 export async function POST(request: Request) {
   try {
@@ -11,10 +40,11 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: "Parameter 'image' wajib diisi" }, { status: 400 });
     }
 
+    const targetUrl = resolveTargetUrl(request, body);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 3000);
+    const timeout = setTimeout(() => controller.abort(), 4000);
 
-    const res = await fetch(`${YOLO_SERVER_URL}/qr`, {
+    const res = await fetch(`${targetUrl}/qr`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ image: body.image }),
@@ -24,7 +54,7 @@ export async function POST(request: Request) {
 
     if (!res.ok) {
       return NextResponse.json(
-        { success: false, error: `Server QR error: status ${res.status}` },
+        { success: false, error: `Server QR error (${targetUrl}): status ${res.status}` },
         { status: res.status }
       );
     }
@@ -41,3 +71,4 @@ export async function POST(request: Request) {
     );
   }
 }
+

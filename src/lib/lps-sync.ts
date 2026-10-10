@@ -12,6 +12,7 @@ export type LpsWeighingPayload = {
   vehicleType?: string;
   wasteType?: string;
   indicatorRaw?: string;
+  qrCode?: string;
 };
 
 export async function syncCompletedWeighingToLps(payload: LpsWeighingPayload) {
