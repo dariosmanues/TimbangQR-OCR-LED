@@ -49,7 +49,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ toke
     try {
       const choice = new URL(request.url).searchParams.get("masterNo");
       const selectedNo = choice ? Number(choice) : undefined;
-      if (choice && (!Number.isSafeInteger(selectedNo) || (selectedNo ?? 0) < 1)) {
+      if (choice && (selectedNo === undefined || !Number.isSafeInteger(selectedNo) || selectedNo < 1)) {
         return NextResponse.json({ error: "Pilihan izin armada tidak valid." }, { status: 422 });
       }
       const record = await resolveLegacyArmadaQr(legacyPlate, selectedNo);
