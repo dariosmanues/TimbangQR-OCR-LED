@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Camera, CheckCircle2, Keyboard, RefreshCw, ScanLine, Sparkles, Upload } from "lucide-react";
+import { tokenFromValue } from "@/lib/qr-token";
 
 declare global {
   interface Window {
@@ -12,22 +13,6 @@ declare global {
       getSupportedFormats?: () => Promise<string[]>;
     };
     webkitAudioContext?: typeof AudioContext;
-  }
-}
-
-function tokenFromValue(value: string) {
-  const trimmed = value.trim();
-  try {
-    const url = new URL(trimmed);
-    const token = url.searchParams.get("token");
-    if (token) return token;
-    const parts = url.pathname.split("/").filter(Boolean);
-    if (parts.length > 0) {
-      return decodeURIComponent(parts[parts.length - 1]);
-    }
-    return trimmed;
-  } catch {
-    return trimmed;
   }
 }
 

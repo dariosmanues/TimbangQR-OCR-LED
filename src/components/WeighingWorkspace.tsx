@@ -51,6 +51,7 @@ export default function WeighingWorkspace({ initialToken = "" }: { initialToken?
   const loadVehicle = useCallback(async (nextToken: string) => {
     if (!nextToken) return;
     setLoadingVehicle(true);
+    setToken(nextToken);
     setMessage("");
     setResult(null);
     try {
@@ -233,6 +234,11 @@ export default function WeighingWorkspace({ initialToken = "" }: { initialToken?
             <div className="empty">
               <Truck size={38} style={{ opacity: .35 }} />
               <p>{loadingVehicle ? "Memuat data armada..." : message || "Pindai QR untuk membuka data armada."}</p>
+              {!loadingVehicle && token && (
+                <p style={{ marginTop: 8, fontSize: 12, overflowWrap: "anywhere", opacity: .75 }}>
+                  Kode yang dikirim untuk validasi: <code>{token}</code>
+                </p>
+              )}
             </div>
           ) : (
             <form onSubmit={save}>
