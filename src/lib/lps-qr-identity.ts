@@ -5,6 +5,7 @@ export type LpsArmada = {
   normalizedPlate: string;
   namaLps: string;
   namaSupir: string | null;
+  noIzinOperasi: string | null;
   jenisArmada: string | null;
   qrCode: string;
   isActive: boolean;
@@ -66,6 +67,7 @@ export function verifyLpsArmada(identity: LpsIdentity, body: unknown): LpsArmada
     normalizedPlate: identity.normalizedPlate,
     namaLps: data.namaLps.trim(),
     namaSupir: typeof data.namaSupir === "string" ? data.namaSupir.trim() || null : null,
+    noIzinOperasi: typeof data.noIzinOperasi === "string" ? data.noIzinOperasi.trim() || null : null,
     jenisArmada: typeof data.jenisArmada === "string" ? data.jenisArmada.trim() || null : null,
     qrCode: data.qrCode,
     isActive: true,

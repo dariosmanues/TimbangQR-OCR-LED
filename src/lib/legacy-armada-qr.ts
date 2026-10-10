@@ -67,10 +67,85 @@ export function chooseMasterRow(plate: string, selectedMasterNo?: number): Maste
  * the source master, operator must explicitly choose which LPS/permit record
  * is being weighed; never guess the first match.
  */
+/**
+ * LPS owns the current printed QR for an armada. Older ARMADA-{plate}
+ * stickers must not be accepted once the kelurahan has regenerated its QR.
+ *
+ * Unregistered legacy fleet entries can continue scanning from the trusted
+ * Harapan Jaya master until an LPS record is registered for that plate.
+ * Every scan rechecks LPS online; network/auth errors fail closed.
+ */
+export async function assertLegacyQrNotRevoked(
+  normalizedPlate: string,
+  presentedQr: string,
+): Promise<void> {
+  const base = process.env.LPS_ARMADA_API_URL?.trim()
+    || "https://lps-app-iota.vercel.app/api/integrations/timbangqr/armada";
+  const url = new URL(base);
+  if (url.protocol !== "https:" && !(process.env.NODE_ENV !== "production" && url.hostname === "localhost")) {
+    throw new LpsQrError("API LPS harus diakses melalui HTTPS.", 503);
+  }
+  url.searchParams.delete("code");
+  url.searchParams.delete("qrCode");
+  url.searchParams.set("plate", normalizedPlate);
+  const secret = process.env.LPS_INTEGRATION_SECRET?.trim();
+  if (!secret && process.env.NODE_ENV === "production") {
+    throw new LpsQrError("Secret API LPS belum dikonfigurasi di TimbangQR.", 503);
+  }
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "GET",
+      headers: secret ? { authorization: "Bearer " + secret } : {},
+      cache: "no-store",
+      signal: AbortSignal.timeout(7000),
+    });
+  } catch {
+    throw new LpsQrError("Tidak bisa mengecek status QR LPS. Coba lagi.", 503);
+  }
+  // The physical sticker is an older fleet-only QR, not yet registered
+  // in the kelurahan's LPS generator. Still supported until registered.
+  if (response.status === 404) return;
+  if (!response.ok) {
+    throw new LpsQrError("Gagal memeriksa QR LPS (HTTP " + response.status + ").", 503);
+  }
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    throw new LpsQrError("Respons validasi QR LPS rusak.", 502);
+  }
+  if (!body || typeof body !== "object") {
+    throw new LpsQrError("Respons validasi QR LPS tidak sesuai.", 502);
+  }
+  const result = body as {
+    success?: boolean;
+    valid?: boolean;
+    data?: { normalizedPlate?: string; platNomor?: string; qrCode?: string; isActive?: boolean };
+  };
+  if (result.success !== true || !result.data ||
+      typeof result.data.qrCode !== "string" ||
+      typeof result.data.platNomor !== "string" ||
+      normalizePlate(result.data.platNomor) !== normalizedPlate) {
+    throw new LpsQrError("Identitas QR LPS tidak dapat dipastikan.", 502);
+  }
+  if (result.valid !== true || result.data.isActive !== true) {
+    throw new LpsQrError("Armada sedang tidak aktif di LPS.", 403);
+  }
+  // Exact payload comparison, never "same plate" matching.
+  if (result.data.qrCode !== presentedQr) {
+    throw new LpsQrError(
+      "QR lama sudah tidak berlaku. Gunakan QR baru dari dashboard LPS Kelurahan.",
+      410,
+    );
+  }
+}
+
 export async function resolveLegacyArmadaQr(
   normalizedPlate: string,
   selectedMasterNo?: number
 ): Promise<LegacyArmadaResult> {
+  await assertLegacyQrNotRevoked(normalizedPlate, "ARMADA-" + normalizedPlate);
   const match = chooseMasterRow(normalizedPlate, selectedMasterNo);
   if (Array.isArray(match)) {
     return { requiresSelection: true, choices: match, source: "ARMADA" };

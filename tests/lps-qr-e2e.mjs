@@ -19,6 +19,14 @@ if (!/timbangqr_ci$/.test(new URL(dbUrl).pathname)) {
 const pool = new Pool({ connectionString: dbUrl });
 let nextProcess = null;
 let totalLpsLookups = 0;
+const fixture = JSON.parse(await fs.readFile(path.resolve("data/master_armada_harapan_jaya_okt2026.json"), "utf8"));
+const activeCodesByPlate = new Map();
+const indexedRows = new Map();
+for (const row of fixture) {
+  const group = indexedRows.get(row.plate_normalized) || [];
+  group.push(row);
+  indexedRows.set(row.plate_normalized, group);
+}
 let mock = null;
 
 const startMockLps = () => new Promise((resolve, reject) => {
@@ -29,6 +37,22 @@ const startMockLps = () => new Promise((resolve, reject) => {
       return;
     }
     totalLpsLookups += 1;
+    const lookedUpPlate = target.searchParams.get("plate");
+    const lookedUpCode = target.searchParams.get("code");
+    const regeneration = lookedUpPlate
+      ? activeCodesByPlate.get(lookedUpPlate)
+      : [...activeCodesByPlate.values()].find(record => record.qrCode === lookedUpCode);
+    if (regeneration) {
+      res.writeHead(200, { "content-type": "application/json", "cache-control": "private, no-store" });
+      res.end(JSON.stringify({ success: true, valid: true, data: regeneration }));
+      return;
+    }
+    // A code that was once active but regenerated again is immediately invalid.
+    if (lookedUpCode && lookedUpCode.startsWith("LPS-") && lookedUpCode !== code) {
+      res.writeHead(404, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify({ success: false, valid: false }));
+      return;
+    }
     if (target.searchParams.get("code") !== code) {
       res.writeHead(404, { "content-type": "application/json" });
       res.end(JSON.stringify({ success: false, valid: false }));
@@ -142,7 +166,7 @@ try {
   );
   assert.equal(operationalCount.rows[0].vehicle_count, 1);
   assert.equal(operationalCount.rows[0].assignment_count, 1);
-  assert.equal(totalLpsLookups, 0, "ARMADA QR must resolve from local verified master, not wrong LPS token");
+  assert.ok(totalLpsLookups > 0, "ARMADA QR must check LPS regeneration status online");
 
   // A complete workflow also creates a weighing ticket for this actual QR format
   // ONLY inside the disposable PostgreSQL database named timbangqr_ci.
@@ -277,6 +301,64 @@ try {
   assert.equal(saved.rows[0].gross_kg, 1250);
   assert.equal(saved.rows[0].tare_kg, 350);
   assert.equal(saved.rows[0].netto_2_kg, 900);
+
+  // Fleet-wide regeneration test: every one of the 68 registry entries
+  // (67 physical plate tokens) revokes the previous printed QR immediately.
+  // A replacement must resolve the exact LPS/permit and keep other QR valid.
+  assert.equal(fixture.length, 68, "Fleet fixture must contain all 68 entries");
+  assert.equal(indexedRows.size, 67, "One plate is shared by two LPS permits");
+  const generatedByPlate = new Map();
+  let checkedRegenerations = 0;
+  for (const row of fixture) {
+    const plate = row.plate_normalized;
+    const oldActive = activeCodesByPlate.get(plate)?.qrCode;
+    const qr = "LPS-" + plate + "-" + String(1791568774000 + checkedRegenerations);
+    activeCodesByPlate.set(plate, {
+      id: "lps-external-" + row.no,
+      platNomor: row.nomor_polisi,
+      normalizedPlate: plate,
+      qrCode: qr,
+      namaLps: row.nama_lps,
+      noIzinOperasi: row.nomor_izin,
+      namaSupir: null,
+      jenisArmada: row.jenis_armada || "PICKUP",
+      isActive: true,
+    });
+
+    const previousSticker = await callApi("/api/qr/ARMADA-" + plate, { cookie });
+    assert.equal(previousSticker.response.status, 410,
+      "Legacy QR must be revoked for master #" + row.no + ": " + JSON.stringify(previousSticker.data));
+
+    if (oldActive) {
+      const obsoleteGeneration = await callApi("/api/qr/" + oldActive, { cookie });
+      assert.equal(obsoleteGeneration.response.status, 404,
+        "Prior regenerated QR must be revoked for master #" + row.no);
+    }
+
+    const newScan = await callApi("/api/qr/" + qr, { cookie });
+    assert.equal(newScan.response.status, 200,
+      "Replacement QR failed for master #" + row.no + ": " + JSON.stringify(newScan.data));
+    assert.equal(newScan.data.lpsVerified, true);
+    assert.equal(newScan.data.vehicle.plate_normalized, plate);
+    assert.equal(newScan.data.assignments[0].lps_name.toUpperCase(), row.nama_lps.toUpperCase());
+    assert.ok(newScan.data.vehicle.id && newScan.data.assignments[0].lps_id,
+      "New QR must resolve internal database IDs for master #" + row.no);
+
+    // Every earlier still-current replacement must remain valid for other
+    // physical plates; the shared BM9601TZ code is an intentional exception.
+    for (const [otherPlate, otherQr] of generatedByPlate) {
+      if (otherPlate !== plate) {
+        const unaffected = await callApi("/api/qr/" + otherQr, { cookie });
+        assert.equal(unaffected.response.status, 200,
+          "Regenerating " + plate + " must not revoke " + otherPlate);
+        break;
+      }
+    }
+    generatedByPlate.set(plate, qr);
+    checkedRegenerations++;
+  }
+  assert.equal(checkedRegenerations, 68);
+  console.log("ALL_68_REGENERATIONS_PASS: every former ARMADA QR rejected, all 68 replacements accepted, other plates unaffected.");
 
   // A fake suffix must not silently degrade to license-plate-only matching.
   const forged = await callApi("/api/qr/LPS-BM8081TT-9999999999999", { cookie });

@@ -46,7 +46,7 @@ function stableCode(prefix: string, value: string) {
 }
 
 type LpsRecord = { id: number; name: string; active: boolean };
-type VehicleLookup = VehicleRow & { active: boolean };
+type VehicleLookup = VehicleRow & { active: boolean; nama_lps: string | null; nomor_izin: string | null };
 export type ResolvedLpsQr = {
   vehicle: VehicleRow;
   assignments: AssignmentRow[];
@@ -65,23 +65,35 @@ export async function linkVerifiedLpsArmada(armada: LpsArmada): Promise<Resolved
     await client.query("SELECT pg_advisory_xact_lock(417, hashtext($1))", [armada.normalizedPlate]);
 
     const vehicleRows = (await client.query<VehicleLookup>(
-      "SELECT id, code, plate_number, plate_normalized, vehicle_type, waste_type, default_tare_kg, qr_token, active FROM vehicles WHERE plate_normalized = $1 ORDER BY active DESC, id LIMIT 3",
+      "SELECT id, code, plate_number, plate_normalized, vehicle_type, waste_type, default_tare_kg, qr_token, active, nama_lps, nomor_izin FROM vehicles WHERE plate_normalized = $1 ORDER BY active DESC, id LIMIT 10",
       [armada.normalizedPlate],
     )).rows;
+    // BM 9601 TZ appears in two permitted LPS assignments. Never pick
+    // a vehicle by plate alone when another permit uses that plate.
+    let candidate: VehicleLookup | null = vehicleRows[0] || null;
     if (vehicleRows.length > 1) {
-      throw new LpsQrError("Nomor polisi memiliki lebih dari satu master armada. Periksa duplikasi sebelum menimbang.", 409);
+      const matchedPermit = armada.noIzinOperasi
+        ? vehicleRows.filter(v => v.nomor_izin === armada.noIzinOperasi)
+        : [];
+      const matches = matchedPermit.length
+        ? matchedPermit
+        : vehicleRows.filter(v => v.nama_lps && normalizeLpsName(v.nama_lps) === normalizeLpsName(armada.namaLps));
+      if (matches.length !== 1) {
+        throw new LpsQrError("Nomor polisi digunakan beberapa LPS; identitas izin QR tidak cukup untuk memilih armada.", 409);
+      }
+      candidate = matches[0];
     }
-    if (vehicleRows[0] && !vehicleRows[0].active) {
+    if (candidate && !candidate.active) {
       throw new LpsQrError("Armada pada TimbangQR sudah dinonaktifkan. Aktifkan melalui master armada dahulu.", 409);
     }
 
-    let vehicle = vehicleRows[0] || null;
+    let vehicle = candidate;
     let masterCreated = false;
     if (!vehicle) {
       const code = stableCode("LPS-ARM-", armada.id);
       const rows = await client.query<VehicleLookup>(
-        "INSERT INTO vehicles (code, plate_number, plate_normalized, vehicle_type, waste_type, default_tare_kg, qr_token, active, nama_lps, lokasi_tps) VALUES ($1,$2,$3,$4,$5,NULL,$6,TRUE,$7,$8) RETURNING id, code, plate_number, plate_normalized, vehicle_type, waste_type, default_tare_kg, qr_token, active",
-        [code, armada.platNomor, armada.normalizedPlate, armada.jenisArmada || "BELUM DIISI", "SAMPAH RUMAH TANGGA", armada.qrCode, armada.namaLps, process.env.LPS_TRANSDEPO || "HARAPAN_JAYA"],
+        "INSERT INTO vehicles (code, plate_number, plate_normalized, vehicle_type, waste_type, default_tare_kg, qr_token, active, nama_lps, lokasi_tps, nomor_izin) VALUES ($1,$2,$3,$4,$5,NULL,$6,TRUE,$7,$8,$9) RETURNING id, code, plate_number, plate_normalized, vehicle_type, waste_type, default_tare_kg, qr_token, active, nama_lps, nomor_izin",
+        [code, armada.platNomor, armada.normalizedPlate, armada.jenisArmada || "BELUM DIISI", "SAMPAH RUMAH TANGGA", armada.qrCode, armada.namaLps, process.env.LPS_TRANSDEPO || "HARAPAN_JAYA", armada.noIzinOperasi],
       );
       vehicle = rows.rows[0];
       masterCreated = true;
