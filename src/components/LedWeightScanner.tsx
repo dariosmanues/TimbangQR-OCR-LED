@@ -403,13 +403,13 @@ export default function LedWeightScanner({
   const samplesRef = useRef<number[]>([]);
 
   // Mesin OCR
-  const DEFAULT_YOLO_TUNNEL_URL = "https://stainless-tolerance-cole-impact.trycloudflare.com";
+  const DEFAULT_YOLO_TUNNEL_URL = "";
   const [ocrEngine, setOcrEngine] = useState<OcrEngine>("yolo");
   const yoloBusyRef = useRef(false);
   const [yoloStatus, setYoloStatus] = useState<"checking" | "online" | "offline">("checking");
-  const [customYoloUrl, setCustomYoloUrl] = useState<string>(DEFAULT_YOLO_TUNNEL_URL);
+  const [customYoloUrl, setCustomYoloUrl] = useState<string>("");
   const [showBridgeModal, setShowBridgeModal] = useState<boolean>(false);
-  const [bridgeInputUrl, setBridgeInputUrl] = useState<string>(DEFAULT_YOLO_TUNNEL_URL);
+  const [bridgeInputUrl, setBridgeInputUrl] = useState<string>("");
   const [yoloLatency, setYoloLatency] = useState<number | null>(null);
   const [testingBridge, setTestingBridge] = useState<boolean>(false);
   const [bridgeFeedback, setBridgeFeedback] = useState<{ type: "success" | "error"; text: string } | null>(null);
@@ -417,65 +417,8 @@ export default function LedWeightScanner({
   const [tesseractReady, setTesseractReady] = useState(false);
   const tesseractWorkerRef = useRef<Worker | null>(null);
   const tesseractBusyRef = useRef(false);
-
-  // Status check untuk backend YOLO OCR
-  const checkYoloHealth = useCallback(async (overrideUrl?: string) => {
-    const target = overrideUrl !== undefined ? overrideUrl : customYoloUrl;
-    try {
-      const startTime = performance.now();
-      const headers: Record<string, string> = {};
-      if (target) headers["x-yolo-url"] = target;
-      const query = target ? `?yoloUrl=${encodeURIComponent(target)}` : "";
-
-      const res = await fetch(`/api/ocr-yolo${query}`, { headers });
-      const data = await res.json();
-      const latency = Math.round(performance.now() - startTime);
-
-      if (data?.online) {
-        setYoloStatus("online");
-        setYoloLatency(latency);
-        return true;
-      } else {
-        setYoloStatus("offline");
-        setYoloLatency(null);
-        return false;
-      }
-    } catch {
-      setYoloStatus("offline");
-      setYoloLatency(null);
-      return false;
-    }
-  }, [customYoloUrl]);
-
-  // Otomatis baca URL tunnel dari query parameter ?yolo_url= atau localStorage (Default ke Cloudflare Tunnel aktif)
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      const params = new URLSearchParams(window.location.search);
-      const urlFromParam = params.get("yolo_url") || params.get("yoloUrl");
-      const saved = localStorage.getItem("timbangqr_yolo_url");
-
-      const activeUrl = (urlFromParam && urlFromParam.trim())
-        || (saved && saved.trim())
-        || DEFAULT_YOLO_TUNNEL_URL;
-
-      if (urlFromParam && urlFromParam.trim()) {
-        localStorage.setItem("timbangqr_yolo_url", urlFromParam.trim());
-      } else if (!saved) {
-        localStorage.setItem("timbangqr_yolo_url", DEFAULT_YOLO_TUNNEL_URL);
-      }
-
-      setCustomYoloUrl(activeUrl);
-      setBridgeInputUrl(activeUrl);
-      setOcrEngine("yolo");
-    }
-  }, []);
-
-  useEffect(() => {
-    if (ocrEngine !== "yolo" && ocrEngine !== "sevenseg") return;
-    checkYoloHealth();
-    const interval = setInterval(checkYoloHealth, 5000);
-    return () => clearInterval(interval);
-  }, [checkYoloHealth, ocrEngine]);
+  const yoloFailCountRef = useRef(0);
+  const lastYoloFrameTimeRef = useRef(0);
 
   const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
   const [cameraId, setCameraId] = useState("");
@@ -494,6 +437,143 @@ export default function LedWeightScanner({
   const [cropArea, setCropArea] = useState<CropArea>(DEFAULT_CROP);
   const [calibrating, setCalibrating] = useState(false);
   const selectionStartRef = useRef<{ x: number; y: number } | null>(null);
+
+  // Status check untuk backend YOLO OCR (Direct Browser + Proxy Next.js)
+  const checkYoloHealth = useCallback(async (overrideUrl?: string): Promise<{ ok: boolean; error?: string }> => {
+    // Jika scanner kamera sedang aktif mengirim frame, jangan ganggu antrean Cloudflare tunnel
+    if (yoloBusyRef.current && overrideUrl === undefined) {
+      return { ok: true };
+    }
+
+    const isLocalHost = typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
+    let target = overrideUrl !== undefined ? overrideUrl : customYoloUrl;
+    target = target ? target.trim().replace(/\/+$/, "") : "";
+
+    // Hanya auto-set ke local 5001 jika overrideUrl TIDAK diberikan dan target kosong pada localhost
+    if (overrideUrl === undefined && isLocalHost && !target) {
+      target = "http://127.0.0.1:5001";
+      setCustomYoloUrl(target);
+      setBridgeInputUrl(target);
+      if (typeof window !== "undefined") {
+        localStorage.setItem("timbangqr_yolo_url", target);
+      }
+    }
+
+    try {
+      const startTime = performance.now();
+      const headers: Record<string, string> = {};
+      if (target) headers["x-yolo-url"] = target;
+      const query = target ? `?yoloUrl=${encodeURIComponent(target)}` : "";
+
+      let online = false;
+      let latency = 0;
+      let errMsg = "";
+
+      // 1. Coba lewat proxy internal /api/ocr-yolo (bebas masalah CORS browser dan Cloudflare preflight)
+      try {
+        const controller = new AbortController();
+        const t = setTimeout(() => controller.abort(), 8000);
+        const res = await fetch(`/api/ocr-yolo${query}`, { headers, signal: controller.signal });
+        clearTimeout(t);
+        const data = await res.json();
+        if (data?.online) {
+          online = true;
+          latency = Math.round(performance.now() - startTime);
+          if (!target && data.targetUrl) {
+            setCustomYoloUrl(data.targetUrl);
+            setBridgeInputUrl(data.targetUrl);
+            if (typeof window !== "undefined") {
+              localStorage.setItem("timbangqr_yolo_url", data.targetUrl);
+            }
+          }
+        } else {
+          errMsg = data?.error || data?.details || "Server tidak merespons";
+        }
+      } catch (proxyErr: any) {
+        errMsg = proxyErr?.message;
+      }
+
+      // 2. Direct browser fetch fallback jika proxy gagal dan target adalah local http
+      if (!online && target && (target.includes("127.0.0.1") || target.includes("localhost"))) {
+        try {
+          const directStart = performance.now();
+          const controller = new AbortController();
+          const t = setTimeout(() => controller.abort(), 3000);
+          const directRes = await fetch(`${target.replace(/\/+$/, "")}/health`, {
+            signal: controller.signal,
+          });
+          clearTimeout(t);
+          if (directRes.ok) {
+            const directData = await directRes.json();
+            if (directData?.status === "ok") {
+              online = true;
+              latency = Math.round(performance.now() - directStart);
+            }
+          }
+        } catch {}
+      }
+
+      if (online) {
+        yoloFailCountRef.current = 0;
+        setYoloStatus("online");
+        setYoloLatency(latency);
+        return { ok: true };
+      } else {
+        yoloFailCountRef.current += 1;
+        // Debounce: Hanya set offline jika gagal minimal 4 kali berturut-turut untuk mencegah status berkedip
+        if (yoloFailCountRef.current >= 4) {
+          setYoloStatus("offline");
+          setYoloLatency(null);
+        }
+        return { ok: false, error: errMsg || "Server tidak merespons" };
+      }
+    } catch (e: any) {
+      yoloFailCountRef.current += 1;
+      if (yoloFailCountRef.current >= 4) {
+        setYoloStatus("offline");
+        setYoloLatency(null);
+      }
+      return { ok: false, error: e?.message || "Gagal menghubungi server OCR" };
+    }
+  }, [customYoloUrl]);
+
+  // Otomatis baca URL bridge dari query parameter ?yolo_url= atau localStorage
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const isLocalHost = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+      const params = new URLSearchParams(window.location.search);
+      const urlFromParam = params.get("yolo_url") || params.get("yoloUrl");
+      const saved = localStorage.getItem("timbangqr_yolo_url");
+
+      let activeUrl = "";
+      if (urlFromParam && urlFromParam.trim()) {
+        activeUrl = urlFromParam.trim();
+        localStorage.setItem("timbangqr_yolo_url", activeUrl);
+      } else if (saved && saved.trim()) {
+        activeUrl = saved.trim();
+      } else if (isLocalHost) {
+        activeUrl = "http://127.0.0.1:5001";
+        localStorage.setItem("timbangqr_yolo_url", activeUrl);
+      } else {
+        activeUrl = DEFAULT_YOLO_TUNNEL_URL;
+      }
+
+      setCustomYoloUrl(activeUrl);
+      setBridgeInputUrl(activeUrl);
+      setOcrEngine("yolo");
+      void checkYoloHealth(activeUrl);
+    }
+  }, [checkYoloHealth]);
+
+  useEffect(() => {
+    if (ocrEngine !== "yolo" && ocrEngine !== "sevenseg") return;
+    checkYoloHealth();
+    const interval = setInterval(() => {
+      if (active && yoloFailCountRef.current === 0) return;
+      checkYoloHealth();
+    }, 8000);
+    return () => clearInterval(interval);
+  }, [checkYoloHealth, ocrEngine, active]);
 
   // Inisialisasi Tesseract.js Worker jika dipilih
   useEffect(() => {
@@ -548,6 +628,8 @@ export default function LedWeightScanner({
     cropArea,
     showVision,
     onReading,
+    customYoloUrl,
+    yoloStatus,
   });
   stateRef.current = {
     ocrEngine,
@@ -557,6 +639,8 @@ export default function LedWeightScanner({
     cropArea,
     showVision,
     onReading,
+    customYoloUrl,
+    yoloStatus,
   };
 
   const pointFromPointer = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
@@ -686,6 +770,8 @@ export default function LedWeightScanner({
       sensitivity: currentSens,
       configuredDigits: currentDigits,
       showVision: currentShowVision,
+      customYoloUrl: activeYoloUrl,
+      yoloStatus: currentYoloStatus,
     } = stateRef.current;
 
     const sourceX = Math.max(0, Math.round(vw * currentCrop.x));
@@ -694,7 +780,13 @@ export default function LedWeightScanner({
     const sourceHeight = Math.min(vh - sourceY, Math.round(vh * currentCrop.height));
     if (sourceWidth < 40 || sourceHeight < 30) return;
 
-    const targetW = Math.min(480, sourceWidth);
+    const isCloudflare = Boolean(
+      activeYoloUrl && (activeYoloUrl.includes("trycloudflare.com") || activeYoloUrl.includes("cloudflare"))
+    );
+
+    // Optimasi ukuran canvas: 320px untuk Cloudflare Tunnel (<15KB payload) agar bebas 502/lag
+    const maxTargetW = isCloudflare ? 320 : 440;
+    const targetW = Math.min(maxTargetW, sourceWidth);
     const targetH = Math.max(1, Math.round(targetW * (sourceHeight / sourceWidth)));
     canvas.width = targetW;
     canvas.height = targetH;
@@ -706,35 +798,66 @@ export default function LedWeightScanner({
 
     // MODE 1 & 2: Deep Learning Vision AI (YOLO & Renjith Seven-Segment CRNN)
     if (currentEngine === "yolo" || currentEngine === "sevenseg") {
+      const now = Date.now();
+      // Jeda minimum: 450ms untuk Cloudflare Tunnel agar tunnel tidak overload, 200ms untuk lokal
+      const minInterval = isCloudflare ? 450 : 200;
+      if (now - lastYoloFrameTimeRef.current < minInterval) return;
       if (yoloBusyRef.current) return;
       yoloBusyRef.current = true;
-      const base64 = canvas.toDataURL("image/jpeg", 0.85);
 
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (customYoloUrl) headers["x-yolo-url"] = customYoloUrl;
+      // Kompresi optimal: 0.60 untuk Cloudflare tunnel (sangat ringan ~12KB), 0.70 untuk lokal
+      const jpegQuality = isCloudflare ? 0.60 : 0.70;
+      const base64 = canvas.toDataURL("image/jpeg", jpegQuality);
+      const postPayload = {
+        image: base64,
+        configuredDigits: currentDigits,
+        colorMode: currentMode,
+        preprocess: true,
+        engine: currentEngine,
+        yoloUrl: activeYoloUrl || undefined,
+      };
 
-      fetch("/api/ocr-yolo", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          image: base64,
-          configuredDigits: currentDigits,
-          colorMode: currentMode,
-          preprocess: true,
-          engine: currentEngine,
-          yoloUrl: customYoloUrl || undefined,
-        }),
-      })
+      // Direct browser fetch HANYA jika server lokal (127.0.0.1 / localhost) dan web berjalan di HTTP
+      // Semua Cloudflare Tunnel / URL remote WAJIB lewat proxy /api/ocr-yolo agar bebas batasan CORS/preflight browser
+      const tryDirect = Boolean(
+        activeYoloUrl &&
+        (activeYoloUrl.includes("127.0.0.1") || activeYoloUrl.includes("localhost")) &&
+        typeof window !== "undefined" &&
+        window.location.protocol === "http:"
+      );
+
+      const postPromise = tryDirect
+        ? fetch(`${activeYoloUrl.replace(/\/+$/, "")}/ocr`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(postPayload),
+            signal: AbortSignal.timeout(8000),
+          })
+        : fetch("/api/ocr-yolo", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(activeYoloUrl ? { "x-yolo-url": activeYoloUrl } : {}),
+            },
+            body: JSON.stringify(postPayload),
+            signal: AbortSignal.timeout(15000),
+          });
+
+      postPromise
         .then(async (res) => {
           if (!res.ok) {
-            const errData = await res.json().catch(() => ({}));
-            if (errData?.online === false) {
+            yoloFailCountRef.current += 1;
+            // Debounce: Hanya set offline jika gagal minimal 4 kali berturut-turut
+            if (yoloFailCountRef.current >= 4) {
               setYoloStatus("offline");
-              setMessage("Server OCR Python / Cloud Bridge belum aktif. Klik 'Atur Bridge URL' atau jalankan MULAI_YOLO_VERCEL.bat");
+              setMessage("Server OCR Cloud Bridge terputus. Memeriksa koneksi kembali...");
             }
             return;
           }
-          setYoloStatus("online");
+          yoloFailCountRef.current = 0;
+          if (currentYoloStatus !== "online") {
+            setYoloStatus("online");
+          }
           const data = await res.json();
           if (data?.success && data.digits) {
             const engineLabel = currentEngine === "sevenseg" ? "CRNN 7-Segment" : "YOLO Vision";
@@ -789,9 +912,14 @@ export default function LedWeightScanner({
         })
         .catch((err) => {
           console.error("YOLO OCR Error:", err);
+          yoloFailCountRef.current += 1;
+          if (yoloFailCountRef.current >= 4) {
+            setYoloStatus("offline");
+          }
         })
         .finally(() => {
           yoloBusyRef.current = false;
+          lastYoloFrameTimeRef.current = Date.now();
         });
 
       return;
@@ -909,17 +1037,19 @@ export default function LedWeightScanner({
   const analyzeRef = useRef(analyze);
   analyzeRef.current = analyze;
 
-  async function start() {
+  async function start(targetCamId?: string) {
     stop();
     setMessage("Meminta izin kamera LED...");
     setReading(null);
     setStable(false);
     samplesRef.current = [];
+    yoloFailCountRef.current = 0;
     try {
+      const activeCamId = targetCamId !== undefined ? targetCamId : cameraId;
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: false,
         video: {
-          deviceId: cameraId ? { exact: cameraId } : undefined,
+          deviceId: activeCamId ? { exact: activeCamId } : undefined,
           width: { ideal: 1280 },
           height: { ideal: 720 },
           facingMode: "environment",
@@ -933,6 +1063,7 @@ export default function LedWeightScanner({
       await refreshCameras();
       setActive(true);
       setMessage("Kamera aktif. Arahkan kotak ke display angka timbangan.");
+      if (timerRef.current) window.clearInterval(timerRef.current);
       timerRef.current = window.setInterval(() => {
         analyzeRef.current();
       }, 120);
@@ -942,9 +1073,39 @@ export default function LedWeightScanner({
     }
   }
 
+  // Otomatis aktifkan kamera dan langsung jalankan OCR services saat aplikasi dibuka
   useEffect(() => {
-    return stop;
-  }, [stop]);
+    let mounted = true;
+    const runAutoStart = async () => {
+      try {
+        let firstCam = "";
+        try {
+          const devices = await navigator.mediaDevices.enumerateDevices();
+          const videoDevs = devices.filter((d) => d.kind === "videoinput");
+          if (mounted) {
+            setCameras(videoDevs);
+            if (videoDevs.length > 0) {
+              firstCam = videoDevs[0].deviceId;
+              setCameraId(firstCam);
+            }
+          }
+        } catch {}
+
+        if (mounted) {
+          await start(firstCam || undefined);
+        }
+      } catch (err) {
+        console.warn("Auto-start camera warning:", err);
+      }
+    };
+
+    runAutoStart();
+
+    return () => {
+      mounted = false;
+      stop();
+    };
+  }, []);
 
   function beginCalibration() {
     setCalibrating(true);
@@ -1184,8 +1345,13 @@ export default function LedWeightScanner({
             <select
               className="select"
               value={cameraId}
-              onChange={(event) => setCameraId(event.target.value)}
-              disabled={active}
+              onChange={(event) => {
+                const nextId = event.target.value;
+                setCameraId(nextId);
+                if (active) {
+                  void start(nextId);
+                }
+              }}
             >
               {cameras.length ? (
                 cameras.map((camera, index) => (
@@ -1318,19 +1484,26 @@ export default function LedWeightScanner({
                       setTestingBridge(true);
                       setBridgeFeedback(null);
                       const cleaned = bridgeInputUrl.trim();
-                      const ok = await checkYoloHealth(cleaned);
+                      const checkRes = await checkYoloHealth(cleaned);
                       setTestingBridge(false);
-                      if (ok) {
+                      if (checkRes.ok) {
                         if (typeof window !== "undefined") {
                           if (cleaned) localStorage.setItem("timbangqr_yolo_url", cleaned);
                           else localStorage.removeItem("timbangqr_yolo_url");
                         }
                         setCustomYoloUrl(cleaned);
+                        setYoloStatus("online");
                         setBridgeFeedback({ type: "success", text: "✓ Berhasil terhubung ke server YOLO!" });
                       } else {
+                        let errMsg = checkRes.error || "Gagal terhubung. Pastikan server/tunnel aktif.";
+                        if (typeof window !== "undefined" && window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1" && cleaned.includes("127.0.0.1")) {
+                          errMsg = `⚠️ Aplikasi sedang dibuka via ${window.location.hostname} (Cloud/Vercel). Vercel tidak bisa mengakses '127.0.0.1' di laptop Anda. Silakan jalankan 'MULAI_YOLO_VERCEL.bat' untuk mendapatkan URL Cloudflare Tunnel (https://xxx.trycloudflare.com)!`;
+                        } else if (cleaned.includes("127.0.0.1") || cleaned.includes("localhost")) {
+                          errMsg = `⚠️ Server Python YOLO belum aktif di port 5001. Silakan jalankan 'MULAI_WINDOWS.bat' atau 'python scripts/yolo_ocr_server.py' terlebih dahulu di terminal.`;
+                        }
                         setBridgeFeedback({
                           type: "error",
-                          text: "Gagal terhubung. Pastikan server/tunnel aktif.",
+                          text: errMsg,
                         });
                       }
                     }}
@@ -1405,10 +1578,33 @@ export default function LedWeightScanner({
                   ⚠️ Server AI YOLO belum terhubung
                 </div>
                 <div style={{ marginBottom: 6, color: "#7f1d1d" }}>
-                  1. Di PC timbangan, jalankan: <code style={{ background: "#fee2e2", padding: "1px 4px", borderRadius: 3, fontWeight: 700 }}>MULAI_YOLO_VERCEL.bat</code><br />
-                  2. Browser akan otomatis terbuka dengan link Cloud Bridge aktif.
+                  1. Di PC timbangan, jalankan: <code style={{ background: "#fee2e2", padding: "1px 4px", borderRadius: 3, fontWeight: 700 }}>MULAI_WINDOWS.bat</code> (Port 5001)<br />
+                  2. Untuk testing cloud Vercel, jalankan <code style={{ background: "#fee2e2", padding: "1px 4px", borderRadius: 3, fontWeight: 700 }}>MULAI_YOLO_VERCEL.bat</code>.
                 </div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 4 }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBridgeInputUrl("http://127.0.0.1:5001");
+                      setCustomYoloUrl("http://127.0.0.1:5001");
+                      if (typeof window !== "undefined") {
+                        localStorage.setItem("timbangqr_yolo_url", "http://127.0.0.1:5001");
+                      }
+                      void checkYoloHealth("http://127.0.0.1:5001");
+                    }}
+                    style={{
+                      background: "#2563eb",
+                      color: "white",
+                      border: "none",
+                      borderRadius: 4,
+                      padding: "3px 8px",
+                      fontSize: 11,
+                      fontWeight: 600,
+                      cursor: "pointer",
+                    }}
+                  >
+                    🔌 Sambungkan ke Lokal (127.0.0.1:5001)
+                  </button>
                   <button
                     type="button"
                     onClick={() => {
@@ -1506,7 +1702,7 @@ export default function LedWeightScanner({
 
         <div style={{ display: "flex", gap: 9, marginTop: 12, flexWrap: "wrap", alignItems: "center" }}>
           {!active ? (
-            <button className="btn btn-primary" type="button" onClick={start} disabled={!cameraId && cameras.length > 0}>
+            <button className="btn btn-primary" type="button" onClick={() => void start()} disabled={!cameraId && cameras.length > 0}>
               <Camera size={17} /> Aktifkan kamera LED
             </button>
           ) : (

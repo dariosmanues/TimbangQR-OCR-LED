@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
-const DEFAULT_YOLO_URL = "https://stainless-tolerance-cole-impact.trycloudflare.com";
+const DEFAULT_YOLO_URL = process.env.YOLO_OCR_URL || "http://127.0.0.1:5001";
 
 function resolveTargetUrl(request: Request, body?: { yoloUrl?: string }): string {
   const headerUrl = request.headers.get("x-yolo-url");
@@ -37,7 +37,7 @@ export async function GET(request: Request) {
   const targetUrl = resolveTargetUrl(request);
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 3500);
+    const timeout = setTimeout(() => controller.abort(), 8500);
     const res = await fetch(`${targetUrl}/health`, {
       signal: controller.signal,
     });
@@ -71,7 +71,7 @@ export async function POST(request: Request) {
 
     const targetUrl = resolveTargetUrl(request, body);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 6000);
+    const timeout = setTimeout(() => controller.abort(), 12000);
 
     const res = await fetch(`${targetUrl}/ocr`, {
       method: "POST",

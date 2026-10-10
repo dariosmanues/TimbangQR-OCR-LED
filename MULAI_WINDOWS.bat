@@ -51,7 +51,7 @@ if not exist serial-agent\node_modules (
   popd
 )
 
-start "TimbangQR YOLO OCR Server" cmd /k "cd /d ""%~dp0"" && python scripts\yolo_ocr_server.py"
+start "TimbangQR YOLO OCR Server" cmd /k "cd /d ""%~dp0"" && JALANKAN_YOLO_LOKAL.bat"
 start "TimbangQR Serial Agent" cmd /k "cd /d ""%~dp0serial-agent"" && npm start"
 echo Web App: http://localhost:3000
 echo YOLO OCR: http://127.0.0.1:5001

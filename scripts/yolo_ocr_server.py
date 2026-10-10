@@ -4,6 +4,7 @@ import sys
 import cv2
 import numpy as np
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
@@ -30,7 +31,7 @@ app = FastAPI(title="TimbangQR OCR Server (YOLO & CRNN)", version="1.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origin_regex=".*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -128,6 +129,54 @@ def preprocess_led_image(image_bgr: np.ndarray, color_mode: str = "red") -> tupl
 
     return cleaned, dilated, True
 
+@app.get("/", response_class=HTMLResponse)
+def root():
+    engine_name = "YOLO 7-Segment & Renjith CRNN" if HAS_SEVENSEG else "YOLO 7-Segment"
+    return f"""<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <title>TimbangQR OCR AI Server</title>
+  <style>
+    * {{ box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
+    body {{ background: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 20px; }}
+    .card {{ background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 32px; max-width: 540px; width: 100%; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5); }}
+    .badge {{ display: inline-flex; align-items: center; gap: 6px; background: rgba(16, 185, 129, 0.15); color: #10b981; padding: 4px 10px; border-radius: 999px; font-size: 13px; font-weight: 600; margin-bottom: 16px; border: 1px solid rgba(16, 185, 129, 0.3); }}
+    .dot {{ width: 8px; height: 8px; background: #10b981; border-radius: 50%; display: inline-block; box-shadow: 0 0 8px #10b981; }}
+    h1 {{ font-size: 22px; font-weight: 700; margin-bottom: 8px; color: #fff; }}
+    p {{ color: #94a3b8; font-size: 14px; line-height: 1.5; margin-bottom: 20px; }}
+    .info-box {{ background: #0f172a; border-radius: 8px; padding: 14px; margin-bottom: 20px; border: 1px solid #334155; }}
+    .info-row {{ display: flex; justify-content: space-between; font-size: 13px; padding: 4px 0; color: #cbd5e1; }}
+    .info-row span:first-child {{ color: #64748b; }}
+    .links {{ display: flex; flex-direction: column; gap: 10px; }}
+    .btn {{ display: inline-flex; align-items: center; justify-content: center; text-decoration: none; padding: 10px 16px; border-radius: 8px; font-size: 14px; font-weight: 600; transition: all 0.2s; }}
+    .btn-primary {{ background: #2563eb; color: #fff; }}
+    .btn-primary:hover {{ background: #1d4ed8; }}
+    .btn-secondary {{ background: #334155; color: #e2e8f0; }}
+    .btn-secondary:hover {{ background: #475569; }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge"><span class="dot"></span> Server YOLO OCR Aktif</div>
+    <h1>TimbangQR Vision AI Server</h1>
+    <p>Ini adalah backend API Python untuk deteksi angka timbangan LED (YOLO) dan QR code scanner. Port 5001 ini berjalan normal dan siap menerima request.</p>
+    
+    <div class="info-box">
+      <div class="info-row"><span>Status</span><b style="color: #10b981;">Online & Siap</b></div>
+      <div class="info-row"><span>Model OCR</span><span>{engine_name}</span></div>
+      <div class="info-row"><span>Port</span><span>5001</span></div>
+    </div>
+
+    <div class="links">
+      <a href="http://localhost:3000" class="btn btn-primary">Buka Web Dashboard (http://localhost:3000)</a>
+      <a href="/docs" class="btn btn-secondary">Dokumentasi API Interactive (Swagger /docs)</a>
+      <a href="/health" class="btn btn-secondary">Cek Status JSON (/health)</a>
+    </div>
+  </div>
+</body>
+</html>"""
+
 @app.get("/health")
 def health():
     return {
@@ -188,10 +237,6 @@ def process_ocr(req: OcrRequest):
 
         if applied:
             target_img = cleaned_img
-            try:
-                cv2.imwrite("hasil_opencv_bersih.png", dilated_mask)
-            except Exception:
-                pass
 
     # Jalankan YOLO predict
     results = model.predict(target_img, conf=conf_thresh, verbose=False)[0]
@@ -374,5 +419,5 @@ def decode_qr_endpoint(req: QrRequest):
 
 if __name__ == "__main__":
     port = int(os.environ.get("YOLO_PORT", 5001))
-    print(f"[YOLO OCR] Menjalankan server pada http://127.0.0.1:{port}")
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
+    print(f"[YOLO OCR] Menjalankan server pada http://127.0.0.1:{port} (host: 0.0.0.0)")
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")

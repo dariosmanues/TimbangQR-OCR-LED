@@ -13,7 +13,6 @@ console.log("\n[1/3] Menjalankan server Python YOLO OCR (Port 5001)...");
 const pythonProc = spawn("python", ["scripts/yolo_ocr_server.py"], {
   cwd: rootDir,
   stdio: "pipe",
-  shell: true,
 });
 
 pythonProc.stdout.on("data", (data) => {
@@ -30,6 +29,10 @@ pythonProc.stderr.on("data", (data) => {
   }
 });
 
+pythonProc.on("error", (err) => {
+  console.error("[Python Error]:", err.message);
+});
+
 // 2. Jalankan Cloudflare Tunnel
 console.log("[2/3] Menghubungkan tunnel aman HTTPS Cloudflare...");
 const cloudflaredBin = path.join(rootDir, "cloudflared.exe");
@@ -40,14 +43,13 @@ if (!fs.existsSync(cloudflaredBin)) {
 
 const cfProc = spawn(cloudflaredBin, ["tunnel", "--url", "http://127.0.0.1:5001"], {
   cwd: rootDir,
-  stdio: "pipe",
-  shell: true,
+  stdio: ["ignore", "pipe", "pipe"],
+  windowsHide: true,
 });
 
 let tunnelUrl = "";
-const rl = readline.createInterface({ input: cfProc.stderr });
 
-rl.on("line", (line) => {
+function handleCloudflareLine(line) {
   const match = line.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i);
   if (match && !tunnelUrl) {
     tunnelUrl = match[0];
@@ -60,20 +62,38 @@ rl.on("line", (line) => {
     try {
       const tempFile = path.join(rootDir, "_temp_yolo_url.txt");
       fs.writeFileSync(tempFile, tunnelUrl, "utf8");
-      execSync(`cmd /c "npx vercel env add YOLO_OCR_URL production --force --yes < ${tempFile}"`, {
+      execSync(`npx vercel env add YOLO_OCR_URL production --force --yes < "${tempFile}"`, {
         cwd: rootDir,
         stdio: "ignore",
+        shell: true,
       });
       if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
       console.log("[Vercel] Sukses! YOLO_OCR_URL berhasil disinkronkan ke Vercel.");
     } catch (err) {
-      console.warn("[Vercel] Peringatan saat update env Vercel:", err.message);
+      console.warn("[Vercel] Info update env Vercel:", err.message);
     }
 
-    console.log("\n>>> STATUS: YOLO Vision AI SIAP DIGUNAKAN DI VERCEL! <<<");
-    console.log("Buka: https://timbangqr-ocr-led.vercel.app/scan");
+    console.log("\n>>> STATUS: YOLO Vision AI SIAP DIGUNAKAN! <<<");
+    console.log(`Link Tunnel Anda : ${tunnelUrl}`);
+    console.log("Membuka browser otomatis dengan link tunnel aktif...");
+    try {
+      execSync(`start "" "https://timbangqr-ocr-led.vercel.app/scan?yolo_url=${encodeURIComponent(tunnelUrl)}"`, {
+        stdio: "ignore",
+        shell: true,
+      });
+    } catch {}
     console.log("Biarkan jendela ini tetap terbuka selama menimbang.\n");
   }
+}
+
+const rlErr = readline.createInterface({ input: cfProc.stderr });
+rlErr.on("line", handleCloudflareLine);
+
+const rlOut = readline.createInterface({ input: cfProc.stdout });
+rlOut.on("line", handleCloudflareLine);
+
+cfProc.on("error", (err) => {
+  console.error("[Cloudflare Error]:", err.message);
 });
 
 process.on("SIGINT", () => {
