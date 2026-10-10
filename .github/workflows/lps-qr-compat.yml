@@ -15,6 +15,8 @@ on:
       - "src/app/(app)/uji-qr/**"
       - "data/master_armada_harapan_jaya_okt2026.json"
       - "src/components/QrScanner.tsx"
+      - "src/lib/qr-image-decode.ts"
+      - "tests/qr-image-decode.test.mjs"
       - "scripts/verify-lps-production.ts"
       - "package.json"
       - ".github/workflows/lps-qr-compat.yml"
