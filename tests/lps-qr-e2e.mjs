@@ -19,6 +19,8 @@ if (!/timbangqr_ci$/.test(new URL(dbUrl).pathname)) {
 const pool = new Pool({ connectionString: dbUrl });
 let nextProcess = null;
 let totalLpsLookups = 0;
+let newlyRegeneratedPlate = false;
+const newBmQr = "LPS-BM8264QM-1791568773999";
 let mock = null;
 
 const startMockLps = () => new Promise((resolve, reject) => {
@@ -29,6 +31,32 @@ const startMockLps = () => new Promise((resolve, reject) => {
       return;
     }
     totalLpsLookups += 1;
+    if (target.searchParams.get("plate") === "BM8264QM" && newlyRegeneratedPlate) {
+      res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify({
+        success: true, valid: true,
+        data: {
+          id: "lps-bm8264qm", platNomor: "BM 8264 QM",
+          normalizedPlate: "BM8264QM", qrCode: newBmQr,
+          namaLps: "Berseri Cinta Raja", namaSupir: "ALFREDO",
+          jenisArmada: "PICKUP", isActive: true,
+        },
+      }));
+      return;
+    }
+    if (target.searchParams.get("code") === newBmQr && newlyRegeneratedPlate) {
+      res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify({
+        success: true, valid: true,
+        data: {
+          id: "lps-bm8264qm", platNomor: "BM 8264 QM",
+          normalizedPlate: "BM8264QM", qrCode: newBmQr,
+          namaLps: "Berseri Cinta Raja", namaSupir: "ALFREDO",
+          jenisArmada: "PICKUP", isActive: true,
+        },
+      }));
+      return;
+    }
     if (target.searchParams.get("code") !== code) {
       res.writeHead(404, { "content-type": "application/json" });
       res.end(JSON.stringify({ success: false, valid: false }));
@@ -142,7 +170,7 @@ try {
   );
   assert.equal(operationalCount.rows[0].vehicle_count, 1);
   assert.equal(operationalCount.rows[0].assignment_count, 1);
-  assert.equal(totalLpsLookups, 0, "ARMADA QR must resolve from local verified master, not wrong LPS token");
+  assert.ok(totalLpsLookups > 0, "ARMADA QR must check LPS regeneration status online");
 
   // A complete workflow also creates a weighing ticket for this actual QR format
   // ONLY inside the disposable PostgreSQL database named timbangqr_ci.
@@ -277,6 +305,20 @@ try {
   assert.equal(saved.rows[0].gross_kg, 1250);
   assert.equal(saved.rows[0].tare_kg, 350);
   assert.equal(saved.rows[0].netto_2_kg, 900);
+
+  // A regenerated QR immediately revokes its prior ARMADA sticker, without
+  // invalidating all the other Harapan Jaya stickers.
+  newlyRegeneratedPlate = true;
+  const staleArmadaQr = await callApi("/api/qr/ARMADA-BM8264QM", { cookie });
+  assert.equal(staleArmadaQr.response.status, 410, JSON.stringify(staleArmadaQr.data));
+  assert.match(staleArmadaQr.data.error, /lama.*tidak berlaku/i);
+  const newQr = await callApi("/api/qr/" + newBmQr, { cookie });
+  assert.equal(newQr.response.status, 200, JSON.stringify(newQr.data));
+  assert.equal(newQr.data.vehicle.plate_normalized, "BM8264QM");
+  assert.equal(newQr.data.assignments[0].lps_name, "Berseri Cinta Raja");
+  const otherPlate = await callApi("/api/qr/ARMADA-BM8106QP", { cookie });
+  assert.equal(otherPlate.response.status, 200,
+    "Regeneration of BM8264QM must not revoke unrelated armadas");
 
   // A fake suffix must not silently degrade to license-plate-only matching.
   const forged = await callApi("/api/qr/LPS-BM8081TT-9999999999999", { cookie });
