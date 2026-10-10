@@ -5,7 +5,7 @@
  * Never creates a weighing, vehicle, LPS, assignment, or test ticket.
  */
 import assert from "node:assert/strict";
-import { dbOne, dbQuery } from "../src/lib/db";
+import { dbOne, dbQuery, getPool } from "../src/lib/db";
 import { fetchVerifiedLpsArmada, parseLpsQrToken } from "../src/lib/lps-qr-integration";
 import { normalizeLpsName } from "../src/lib/lps-qr-identity";
 
@@ -54,3 +54,5 @@ console.log("LPS_LIVE_QR_READONLY_PASS", JSON.stringify({
   lpsAlreadyRegistered: found.length === 1,
   willSynchronizeOnScan: matches.length === 0 || found.length === 0,
 }));
+
+await getPool().end();
