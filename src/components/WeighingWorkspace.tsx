@@ -37,6 +37,7 @@ export default function WeighingWorkspace({ initialToken = "" }: { initialToken?
   const [token, setToken] = useState(initialToken);
   const [payload, setPayload] = useState<VehiclePayload | null>(null);
   const [loadingVehicle, setLoadingVehicle] = useState(false);
+  const [armadaChoices, setArmadaChoices] = useState<Array<{ no: number; plate: string; lps: string }>>([]);
   const [message, setMessage] = useState("");
   const [ocrReading, setOcrReading] = useState<LedWeightReading | null>(null);
   const [lpsId, setLpsId] = useState("");
@@ -48,16 +49,24 @@ export default function WeighingWorkspace({ initialToken = "" }: { initialToken?
   const [saving, setSaving] = useState(false);
   const [result, setResult] = useState<{ ticketNumber: string; netto2Kg: number } | null>(null);
 
-  const loadVehicle = useCallback(async (nextToken: string) => {
+  const loadVehicle = useCallback(async (nextToken: string, selectedMasterNo?: number) => {
     if (!nextToken) return;
     setLoadingVehicle(true);
+    setArmadaChoices([]);
     setToken(nextToken);
     setMessage("");
     setResult(null);
     try {
-      const response = await fetch(`/api/qr/${encodeURIComponent(nextToken)}`, { cache: "no-store" });
+      const url = `/api/qr/${encodeURIComponent(nextToken)}${selectedMasterNo ? `?masterNo=${selectedMasterNo}` : ""}`;
+      const response = await fetch(url, { cache: "no-store" });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "QR tidak valid");
+      if (data.requiresSelection && Array.isArray(data.choices)) {
+        setPayload(null);
+        setArmadaChoices(data.choices);
+        setMessage("QR dikenali. Nomor polisi tercatat untuk lebih dari satu LPS; pilih LPS yang sedang mengirim sampah.");
+        return;
+      }
       const parsed = data as VehiclePayload;
       setToken(nextToken);
       setPayload(parsed);
@@ -236,6 +245,16 @@ export default function WeighingWorkspace({ initialToken = "" }: { initialToken?
             <div className="empty">
               <Truck size={38} style={{ opacity: .35 }} />
               <p>{loadingVehicle ? "Memuat data armada..." : message || "Pindai QR untuk membuka data armada."}</p>
+              {armadaChoices.length > 0 && (
+                <div style={{ display: "grid", gap: 8, marginTop: 16, width: "100%", maxWidth: 480 }}>
+                  {armadaChoices.map(choice => (
+                    <button key={choice.no} className="btn btn-secondary" type="button"
+                      onClick={() => void loadVehicle(token, choice.no)}>
+                      {choice.plate} — {choice.lps} (Izin #{choice.no})
+                    </button>
+                  ))}
+                </div>
+              )}
               {!loadingVehicle && token && (
                 <p style={{ marginTop: 8, fontSize: 12, overflowWrap: "anywhere", opacity: .75 }}>
                   Kode yang dikirim untuk validasi: <code>{token}</code>
