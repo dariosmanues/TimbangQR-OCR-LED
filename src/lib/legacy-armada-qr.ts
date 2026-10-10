@@ -99,7 +99,7 @@ export async function resolveLegacyArmadaQr(
       // Reuse legacy vehicles without an assigned permit when unambiguous;
       // never steal another LPS's permit identity for a duplicate plate.
       const candidates = vehicles.filter(v => !v.nomor_izin);
-      if (candidates.length === 1 && vehicles.length === 1) vehicle = candidates[0];
+      if (candidates.length === 1 && vehicles.length === 1 && getMasterRowsForPlate(normalizedPlate).length === 1) vehicle = candidates[0];
     }
 
     if (vehicle && !vehicle.active) {
