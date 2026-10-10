@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Camera, CheckCircle2, Keyboard, RefreshCw, ScanLine, Sparkles, Upload } from "lucide-react";
 import { tokenFromValue } from "@/lib/qr-token";
+import { decodeQrRgba } from "@/lib/qr-image-decode";
 
 declare global {
   interface Window {
@@ -16,6 +17,37 @@ declare global {
   }
 }
 
+/** Decode an uploaded image locally. Works without the YOLO/OpenCV server. */
+function decodeUploadedQr(img: HTMLImageElement): string | null {
+  const width = img.naturalWidth;
+  const height = img.naturalHeight;
+  if (!width || !height) return null;
+  const maxDim = Math.max(width, height);
+  const plans = [
+    { size: Math.min(1200, maxDim), pad: 0 },
+    { size: Math.min(1200, Math.max(500, maxDim)), pad: 18 },
+    { size: Math.min(1600, Math.max(900, maxDim)), pad: 36 },
+  ];
+  for (const plan of plans) {
+    const scale = plan.size / maxDim;
+    const w = Math.max(1, Math.round(width * scale));
+    const h = Math.max(1, Math.round(height * scale));
+    const padding = plan.pad;
+    const canvas = document.createElement("canvas");
+    canvas.width = w + padding * 2;
+    canvas.height = h + padding * 2;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) continue;
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.imageSmoothingEnabled = scale < 1;
+    ctx.drawImage(img, padding, padding, w, h);
+    const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const result = decodeQrRgba(pixels.data, pixels.width, pixels.height);
+    if (result) return result;
+  }
+  return null;
+}
 function playBeep() {
   try {
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
@@ -199,6 +231,14 @@ export default function QrScanner({ onToken }: { onToken: (token: string) => voi
               const ctx = canvas.getContext("2d");
               if (ctx) {
                 ctx.drawImage(v, 0, 0, w, h);
+                // Local image decoder works on Vercel even when the optional
+                // external YOLO/OpenCV QR endpoint is unavailable.
+                const pixels = ctx.getImageData(0, 0, w, h);
+                const localCode = decodeQrRgba(pixels.data, w, h);
+                if (localCode && !isDecodingRef.current) {
+                  handleDetected(localCode, "QR Lokal");
+                  return;
+                }
                 const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
                 const res = await fetch("/api/qr-decode", {
                   method: "POST",
@@ -228,76 +268,73 @@ export default function QrScanner({ onToken }: { onToken: (token: string) => voi
   async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-
     setUploading(true);
-    setMessage("Membaca gambar QR...");
-
+    setSuccessCode(null);
+    setMessage("Membaca QR dari gambar...");
     try {
-      const reader = new FileReader();
-      reader.onload = async (event) => {
-        const dataUrl = event.target?.result as string;
-        if (!dataUrl) {
-          setUploading(false);
-          return;
-        }
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => reject(new Error("File gambar gagal dibaca."));
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.readAsDataURL(file);
+      });
+      const img = new Image();
+      img.src = dataUrl;
+      await img.decode();
 
-        // 1. Try server-assisted OpenCV decoder
+      // Main path: works offline on all QR PNGs issued by the LPS generator.
+      const decoded = decodeUploadedQr(img);
+      if (decoded) {
+        handleDetected(decoded, "Foto QR");
+        return;
+      }
+
+      // Fallback: native browser image recognition.
+      if (window.BarcodeDetector) {
         try {
-          const res = await fetch("/api/qr-decode", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ image: dataUrl }),
-          });
-          if (res.ok) {
-            const data = await res.json();
-            if (data.success && data.text) {
-              setUploading(false);
-              handleDetected(data.text, "Foto/File");
-              return;
-            }
+          const detector = new window.BarcodeDetector({ formats: ["qr_code"] });
+          const found = await detector.detect(img);
+          if (found[0]?.rawValue) {
+            handleDetected(found[0].rawValue, "Foto Hardware");
+            return;
           }
         } catch {}
+      }
 
-        // 2. Fallback to client BarcodeDetector or ZXing
-        const img = new Image();
-        img.onload = async () => {
-          if (typeof window !== "undefined" && "BarcodeDetector" in window) {
-            try {
-              const detector = new window.BarcodeDetector!({ formats: ["qr_code"] });
-              const barcodes = await detector.detect(img);
-              if (barcodes && barcodes.length > 0 && barcodes[0]?.rawValue) {
-                setUploading(false);
-                handleDetected(barcodes[0].rawValue, "Foto/Hardware");
-                return;
-              }
-            } catch {}
+      // Fallback: ZXing decoder.
+      try {
+        const { BrowserQRCodeReader } = await import("@zxing/browser");
+        const result = await new BrowserQRCodeReader().decodeFromImageElement(img);
+        if (result?.getText()) {
+          handleDetected(result.getText(), "Foto ZXing");
+          return;
+        }
+      } catch {}
+
+      // Optional server fallback; not required for clean dashboard QR.
+      try {
+        const response = await fetch("/api/qr-decode", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ image: dataUrl }),
+          signal: AbortSignal.timeout(3500),
+        });
+        if (response.ok) {
+          const result = await response.json();
+          if (result.success && result.text) {
+            handleDetected(result.text, "Foto Vision");
+            return;
           }
-
-          try {
-            const { BrowserQRCodeReader } = await import("@zxing/browser");
-            const codeReader = new BrowserQRCodeReader();
-            const result = await codeReader.decodeFromImageElement(img);
-            if (result) {
-              setUploading(false);
-              handleDetected(result.getText(), "Foto/ZXing");
-              return;
-            }
-          } catch {}
-
-          setUploading(false);
-          setMessage("QR code tidak ditemukan di dalam gambar yang diunggah.");
-        };
-        img.src = dataUrl;
-      };
-      reader.readAsDataURL(file);
-    } catch (err: any) {
-      setUploading(false);
-      setMessage("Gagal membaca file gambar: " + (err?.message || ""));
+        }
+      } catch {}
+      setMessage("Kode QR tidak terbaca dari gambar. Gunakan foto QR yang jelas dan utuh.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "File gambar gagal diproses.");
     } finally {
+      setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   }
-
   return (
     <div className="card">
       <div className="card-head">
