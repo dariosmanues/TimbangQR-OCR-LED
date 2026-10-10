@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   BarChart3,
+  ClipboardCheck,
   Camera,
   FileSpreadsheet,
   Gauge,
@@ -15,6 +16,7 @@ import {
 const items = [
   { href: "/dashboard", label: "Dashboard", icon: BarChart3 },
   { href: "/scan", label: "Scan & Timbang", icon: Camera },
+  { href: "/uji-qr", label: "Uji Semua QR", icon: ClipboardCheck },
   { href: "/armada", label: "Master Armada", icon: Truck },
   { href: "/transaksi", label: "Transaksi", icon: Gauge },
   { href: "/laporan", label: "Rekap & Laporan", icon: FileSpreadsheet },
