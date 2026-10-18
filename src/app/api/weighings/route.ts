@@ -59,8 +59,9 @@ export async function POST(request: Request) {
       plate_number: string;
       vehicle_type: string;
       waste_type: string;
+      qr_token: string | null;
     }>(`
-      SELECT id, plate_number, vehicle_type, waste_type
+      SELECT id, plate_number, vehicle_type, waste_type, qr_token
       FROM vehicles WHERE id = $1 AND active = TRUE
     `, [input.vehicleId]);
     const lps = await dbOne<{ id: number; name: string }>(
@@ -116,14 +117,8 @@ export async function POST(request: Request) {
       const id = inserted.rows[0].id;
 
       // Catat token QR sebagai HANGUS agar tidak bisa discan/dipakai ulang
-      // PENTING: QR MASTER ARMADA bersifat PERMANEN dan TIDAK PERNAH DIHANGUSKAN!
-      // Hanya token slip sekali pakai LPS (berawalan LPS-) yang dicatat ke burned_qr_tokens.
-      const isMasterQr = !input.qrToken ||
-        /^ARMADA-/i.test(input.qrToken.trim()) ||
-        /^QR-ARMADA-/i.test(input.qrToken.trim()) ||
-        !input.qrToken.trim().toUpperCase().startsWith("LPS-");
-
-      if (input.qrToken && input.qrToken.trim() && !isMasterQr) {
+      // Jika token yang discan/diinput berawalan LPS-, catat langsung ke burned_qr_tokens
+      if (input.qrToken && input.qrToken.trim() && /^LPS-/i.test(input.qrToken.trim())) {
         try {
           await client.query(`
             INSERT INTO burned_qr_tokens (qr_token, plate_number, ticket_number, vehicle_id, burned_at)
@@ -134,6 +129,21 @@ export async function POST(request: Request) {
           `, [input.qrToken.trim(), vehicle.plate_number, ticket, vehicle.id]);
         } catch (e) {
           console.warn("[Weighings] Gagal mencatat burned_qr_tokens:", e);
+        }
+      }
+
+      // Jika kendaraan menyimpan qr_token LPS di master lokal, hanguskan juga token tersebut
+      if (vehicle.qr_token && /^LPS-/i.test(vehicle.qr_token.trim())) {
+        try {
+          await client.query(`
+            INSERT INTO burned_qr_tokens (qr_token, plate_number, ticket_number, vehicle_id, burned_at)
+            VALUES ($1, $2, $3, $4, NOW())
+            ON CONFLICT (qr_token) DO UPDATE SET
+              ticket_number = EXCLUDED.ticket_number,
+              burned_at = NOW()
+          `, [vehicle.qr_token.trim(), vehicle.plate_number, ticket, vehicle.id]);
+        } catch (e) {
+          console.warn("[Weighings] Gagal mencatat vehicle.qr_token ke burned_qr_tokens:", e);
         }
       }
 

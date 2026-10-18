@@ -190,8 +190,8 @@ export default function WeighingWorkspace({ initialToken = "" }: { initialToken?
       setResult({ ticketNumber: data.ticketNumber, netto2Kg: data.netto2Kg });
       setMessage(
         isMaster
-          ? `✓ Transaksi berhasil disimpan (Tiket #${data.ticketNumber}). QR Master Armada tetap aktif & siap digunakan kembali.`
-          : `✓ Transaksi berhasil disimpan (Tiket #${data.ticketNumber}). QR Code LPS sekali pakai telah selesai.`
+          ? `✓ Transaksi berhasil disimpan (Tiket #${data.ticketNumber}). QR Code LPS armada ${payload.vehicle.plate_number} telah dihanguskan pada dashboard LPS.`
+          : `✓ Transaksi berhasil disimpan (Tiket #${data.ticketNumber}). QR Code LPS sekali pakai telah hangus.`
       );
       setScannedQrToken("");
       setToken("");
