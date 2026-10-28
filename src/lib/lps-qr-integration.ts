@@ -6,23 +6,50 @@ import { LpsQrError, normalizeLpsName, verifyLpsArmada } from "./lps-qr-identity
 import type { LpsIdentity, LpsArmada } from "./lps-qr-identity";
 export { LpsQrError, parseLpsQrToken } from "./lps-qr-identity";
 
+const DEFAULT_LPS_ARMADA_URL = "https://lps-app-five.vercel.app/api/integrations/timbangqr/armada";
+const DEFAULT_LPS_SECRET = "a8f9c4e2b7d013589ef671234abcd567890ef123456789abcdef0123456789ab";
+
+function getTargetLpsArmadaUrl(): string {
+  const configured = process.env.LPS_ARMADA_API_URL?.trim();
+  if (!configured) return DEFAULT_LPS_ARMADA_URL;
+  if (configured.includes("lps-app-iota.vercel.app") || configured.includes("lps-app-fikris-projects")) {
+    return DEFAULT_LPS_ARMADA_URL;
+  }
+  return configured;
+}
+
 export async function fetchVerifiedLpsArmada(identity: LpsIdentity): Promise<LpsArmada> {
-  const baseUrl = process.env.LPS_ARMADA_API_URL?.trim()
-    || "https://lps-app-iota.vercel.app/api/integrations/timbangqr/armada";
+  const baseUrl = getTargetLpsArmadaUrl();
   const url = new URL(baseUrl);
   if (url.protocol !== "https:" && !(process.env.NODE_ENV !== "production" && url.hostname === "localhost")) {
     throw new LpsQrError("Konfigurasi API LPS harus menggunakan HTTPS.", 503);
   }
   url.searchParams.set("code", identity.token);
-  const secret = process.env.LPS_INTEGRATION_SECRET?.trim();
+  const secret = process.env.LPS_INTEGRATION_SECRET?.trim() || DEFAULT_LPS_SECRET;
+  const headers: Record<string, string> = secret ? { authorization: "Bearer " + secret } : {};
   let response: Response;
   try {
     response = await fetch(url, {
       method: "GET",
-      headers: secret ? { authorization: "Bearer " + secret } : {},
+      headers,
       cache: "no-store",
       signal: AbortSignal.timeout(7000),
     });
+    // Fallback otomatis ke URL produksi aktif jika URL lama di env mengalami HTTP 402 (DEPLOYMENT_DISABLED)
+    if (
+      response.status === 402 &&
+      url.hostname !== "localhost" &&
+      url.origin !== new URL(DEFAULT_LPS_ARMADA_URL).origin
+    ) {
+      const fallbackUrl = new URL(DEFAULT_LPS_ARMADA_URL);
+      fallbackUrl.searchParams.set("code", identity.token);
+      response = await fetch(fallbackUrl, {
+        method: "GET",
+        headers,
+        cache: "no-store",
+        signal: AbortSignal.timeout(7000),
+      });
+    }
   } catch {
     throw new LpsQrError("API LPS sedang tidak dapat dihubungi. Coba lagi.", 503);
   }
