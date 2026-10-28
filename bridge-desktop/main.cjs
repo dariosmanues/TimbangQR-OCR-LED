@@ -1,8 +1,14 @@
 const { app, BrowserWindow, Menu, Tray, nativeImage, safeStorage, ipcMain, dialog } = require("electron");
-const { fork } = require("node:child_process");
+const { fork, execSync } = require("node:child_process");
 const fs = require("node:fs");
-const http = require("node:http");
 const path = require("node:path");
+const http = require("node:http");
+
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+  process.exit(0);
+}
 
 let windowRef;
 let tray;
@@ -11,72 +17,136 @@ let agentLogPath = "";
 let agentStartError = "";
 let operatorConfig = {};
 const bridgeUrl = "http://127.0.0.1:8787";
-const defaultIngestUrl = "https://timbangqr-harapan-jaya.vercel.app/api/serial/ingest";
-const legacyLocalIngestUrl = "http://127.0.0.1:3000/api/serial/ingest";
+const defaultIngestUrl = "https://timbangqr-ocr-led-rose.vercel.app/api/serial/ingest";
+const defaultDeviceId = "TIMBANG-HJ-SERIAL-01";
+const defaultSerialApiKey = "serial-local-key-ganti-sebelum-produksi";
 const defaultBridgeAdminKey = "bridge-admin-key-ganti-sebelum-produksi";
 
-function configPath() { return path.join(app.getPath("userData"), "operator-settings.json"); }
-function normalizeIngestUrl(value) {
-  const normalized = String(value || "").trim();
-  return !normalized || normalized === legacyLocalIngestUrl ? defaultIngestUrl : normalized;
+function normalizeIngestUrl(raw) {
+  let url = String(raw || "").trim();
+  const mdMatch = url.match(/\[([^\]]+)\]\(([^)]+)\)/);
+  if (mdMatch) {
+    url = mdMatch[2].trim();
+  } else {
+    url = url.replace(/^[<[(]+|[>\])]+$/g, "").trim();
+  }
+  url = url.replace(/\/+$/, "");
+  if (!url) return "";
+  if (url.startsWith("http://") && url.includes(".vercel.app")) {
+    url = "https://" + url.slice(7);
+  }
+  if (url.includes("timbangqr-harapan-jaya.vercel.app")) {
+    url = url.replace("timbangqr-harapan-jaya.vercel.app", "timbangqr-ocr-led-rose.vercel.app");
+  }
+  if (!url.endsWith("/api/serial/ingest")) {
+    url += "/api/serial/ingest";
+  }
+  return url;
 }
+
+function configPath() { return path.join(app.getPath("userData"), "operator-settings.json"); }
 function loadConfig() {
   try {
     const saved = JSON.parse(fs.readFileSync(configPath(), "utf8"));
-    return {
-      ...saved,
-      // Instalasi lama menyimpan endpoint aplikasi lokal. Di komputer operator
-      // endpoint tersebut tidak ada; semua pembacaan harus dikirim ke Vercel.
-      ingestUrl: normalizeIngestUrl(saved.ingestUrl),
-      serialApiKey: saved.serialApiKey ? safeStorage.decryptString(Buffer.from(saved.serialApiKey, "base64")) : "",
-      bridgeAdminKey: saved.bridgeAdminKey ? safeStorage.decryptString(Buffer.from(saved.bridgeAdminKey, "base64")) : "",
+    const decrypt = (val) => {
+      if (!val) return "";
+      try {
+        if (safeStorage && safeStorage.isEncryptionAvailable()) {
+          return safeStorage.decryptString(Buffer.from(val, "base64"));
+        }
+      } catch {}
+      return "";
     };
-  } catch { return {}; }
+    return {
+      ingestUrl: defaultIngestUrl,
+      deviceId: defaultDeviceId,
+      serialApiKey: defaultSerialApiKey,
+      bridgeAdminKey: defaultBridgeAdminKey,
+      ...saved,
+      ingestUrl: normalizeIngestUrl(saved.ingestUrl || defaultIngestUrl) || defaultIngestUrl,
+      serialApiKey: decrypt(saved.serialApiKey) || defaultSerialApiKey,
+      bridgeAdminKey: decrypt(saved.bridgeAdminKey) || defaultBridgeAdminKey,
+    };
+  } catch {
+    return {
+      ingestUrl: defaultIngestUrl,
+      deviceId: defaultDeviceId,
+      serialApiKey: defaultSerialApiKey,
+      bridgeAdminKey: defaultBridgeAdminKey,
+    };
+  }
 }
 function saveConfig(next) {
   const definedValues = Object.fromEntries(Object.entries(next).filter(([, value]) => value !== undefined));
+  if (definedValues.ingestUrl) {
+    definedValues.ingestUrl = normalizeIngestUrl(definedValues.ingestUrl);
+  }
   operatorConfig = { ...operatorConfig, ...definedValues };
-  operatorConfig.ingestUrl = normalizeIngestUrl(operatorConfig.ingestUrl);
   const stored = { ...operatorConfig };
   for (const key of ["serialApiKey", "bridgeAdminKey"]) {
-    if (stored[key]) stored[key] = safeStorage.encryptString(stored[key]).toString("base64");
+    if (stored[key]) {
+      try {
+        if (safeStorage && safeStorage.isEncryptionAvailable()) {
+          stored[key] = safeStorage.encryptString(stored[key]).toString("base64");
+        }
+      } catch {}
+    }
   }
   fs.writeFileSync(configPath(), JSON.stringify(stored, null, 2));
 }
-async function request(pathname, options = {}) {
-  const target = new URL(pathname, bridgeUrl);
-  const body = options.body ? String(options.body) : "";
-  const headers = {
-    "x-bridge-key": operatorConfig.bridgeAdminKey || defaultBridgeAdminKey,
-    ...(options.headers || {}),
-  };
-  if (body) headers["content-length"] = Buffer.byteLength(body);
+function request(pathname, options = {}) {
   return new Promise((resolve, reject) => {
-    const pending = http.request({
-      protocol: target.protocol,
-      hostname: target.hostname,
-      port: target.port,
-      method: options.method || "GET",
-      path: `${target.pathname}${target.search}`,
-      headers,
-    }, (response) => {
-      let received = "";
-      response.setEncoding("utf8");
-      response.on("data", (chunk) => { received += chunk; });
-      response.on("end", () => {
-        let parsed = {};
-        try { parsed = received ? JSON.parse(received) : {}; } catch {}
-        if ((response.statusCode || 500) >= 400) {
-          reject(new Error(parsed.error || "Bridge tidak merespons."));
-          return;
-        }
-        resolve(parsed);
+    try {
+      const url = new URL(bridgeUrl + pathname);
+      const method = options.method || "GET";
+      const bodyData = options.body ? (typeof options.body === "string" ? options.body : JSON.stringify(options.body)) : null;
+      const headers = {
+        "x-bridge-key": operatorConfig.bridgeAdminKey || defaultBridgeAdminKey,
+        ...(options.headers || {}),
+      };
+      if (bodyData && !headers["content-length"] && !headers["Content-Length"]) {
+        headers["content-length"] = Buffer.byteLength(bodyData);
+      }
+
+      const reqTimeout = Number(options.timeout || 10000);
+      const req = http.request(url, {
+        method,
+        headers,
+        timeout: reqTimeout,
+      }, (res) => {
+        let raw = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => { raw += chunk; });
+        res.on("end", () => {
+          let body = {};
+          try {
+            body = raw ? JSON.parse(raw) : {};
+          } catch {
+            body = { raw };
+          }
+          if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+            resolve(body);
+          } else {
+            reject(new Error(body.error || `Bridge tidak merespons (HTTP ${res.statusCode}).`));
+          }
+        });
       });
-    });
-    pending.setTimeout(5000, () => pending.destroy(new Error("Bridge tidak merespons.")));
-    pending.on("error", reject);
-    if (body) pending.write(body);
-    pending.end();
+
+      req.on("timeout", () => {
+        req.destroy(new Error(`Timeout koneksi ke Bridge agent (${Math.round(reqTimeout / 1000)} detik).`));
+      });
+
+      req.on("error", (err) => {
+        reject(err);
+      });
+
+      if (bodyData) {
+        req.write(bodyData);
+      }
+      req.end();
+    } catch (err) {
+      reject(err);
+    }
   });
 }
 async function stopAgent() {
@@ -100,8 +170,45 @@ async function stopAgent() {
     }, 2000).unref();
   });
 }
+function isTimbangProcess(pid) {
+  try {
+    const taskInfo = execSync(`tasklist /FI "PID eq ${pid}" /FO CSV /NH`, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const procName = (taskInfo.split(",")[0] || "").replace(/^"|"$/g, "").toLowerCase();
+    return (
+      procName.includes("node") ||
+      procName.includes("electron") ||
+      procName.includes("timbang")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function killOrphanOnPort(port = 8787) {
+  try {
+    if (process.platform === "win32") {
+      const output = execSync(`netstat -ano -p tcp | findstr :${port} | findstr LISTENING`, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+      for (const line of output.split(/\r?\n/)) {
+        const parts = line.trim().split(/\s+/);
+        const pid = parts[parts.length - 1];
+        if (pid && pid !== "0" && Number(pid) !== process.pid) {
+          if (isTimbangProcess(pid)) {
+            try {
+              execSync(`taskkill /F /PID ${pid}`, { stdio: "ignore" });
+            } catch {}
+          }
+        }
+      }
+    }
+  } catch {}
+}
+
 async function startAgent() {
   await stopAgent();
+  killOrphanOnPort(8787);
   agentStartError = "";
   const dataDir = path.join(app.getPath("userData"), "agent-data");
   fs.mkdirSync(dataDir, { recursive: true });
@@ -116,9 +223,9 @@ async function startAgent() {
         SERIAL_AGENT_DATA_DIR: dataDir,
         SERIAL_BRIDGE_HOST: "127.0.0.1",
         SERIAL_BRIDGE_PORT: "8787",
-        SERIAL_INGEST_URL: normalizeIngestUrl(operatorConfig.ingestUrl),
-        SERIAL_API_KEY: operatorConfig.serialApiKey || "",
-        SERIAL_DEVICE_ID: operatorConfig.deviceId || "TIMBANG-HJ-SERIAL-01",
+        SERIAL_INGEST_URL: normalizeIngestUrl(operatorConfig.ingestUrl || defaultIngestUrl),
+        SERIAL_API_KEY: operatorConfig.serialApiKey || defaultSerialApiKey,
+        SERIAL_DEVICE_ID: operatorConfig.deviceId || defaultDeviceId,
         SERIAL_BRIDGE_ADMIN_KEY: operatorConfig.bridgeAdminKey || defaultBridgeAdminKey,
         SERIAL_AUTO_CONNECT: "true",
       },
@@ -198,14 +305,22 @@ app.whenReady().then(async () => {
   setupTray();
   showWindow();
 });
+app.on("second-instance", () => {
+  if (windowRef) {
+    if (windowRef.isMinimized()) windowRef.restore();
+    windowRef.show();
+    windowRef.focus();
+  }
+});
 app.on("window-all-closed", (event) => event.preventDefault());
 app.on("before-quit", () => { app.isQuiting = true; agent?.kill(); });
 
 ipcMain.handle("bridge:get-config", () => ({
-  ingestUrl: normalizeIngestUrl(operatorConfig.ingestUrl),
-  deviceId: operatorConfig.deviceId || "TIMBANG-HJ-SERIAL-01",
-  hasSerialApiKey: Boolean(operatorConfig.serialApiKey),
-  hasBridgeAdminKey: Boolean(operatorConfig.bridgeAdminKey),
+  ingestUrl: operatorConfig.ingestUrl || defaultIngestUrl,
+  deviceId: operatorConfig.deviceId || defaultDeviceId,
+  serialApiKey: operatorConfig.serialApiKey || defaultSerialApiKey,
+  hasSerialApiKey: Boolean(operatorConfig.serialApiKey || defaultSerialApiKey),
+  hasBridgeAdminKey: Boolean(operatorConfig.bridgeAdminKey || defaultBridgeAdminKey),
 }));
 ipcMain.handle("bridge:save-config", async (_event, values) => {
   saveConfig(values);
@@ -220,3 +335,9 @@ ipcMain.handle("bridge:connect", async (_event, serial) => {
   return request("/connect", { method: "POST" });
 });
 ipcMain.handle("bridge:disconnect", () => request("/disconnect", { method: "POST" }));
+ipcMain.handle("bridge:clear-queue", async () => {
+  return request("/queue/clear", { method: "POST" });
+});
+ipcMain.handle("bridge:test-ingest", async () => {
+  return request("/test-ingest", { method: "POST", timeout: 12000 });
+});
