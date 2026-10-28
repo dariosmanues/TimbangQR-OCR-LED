@@ -116,7 +116,7 @@ export default function WeighingWorkspace({ initialToken = "" }: { initialToken?
           Date.now() - Date.parse(nextReading.recorded_at) <= 10 * 60 * 1000;
         const isNewReading = lastAppliedReadingIdRef.current !== nextReading.id;
 
-        if (isRecentReading && (isNewReading || nextReading.stable)) {
+        if (isRecentReading && isNewReading) {
           lastAppliedReadingIdRef.current = nextReading.id;
           setGrossKg((prev) => {
             if (!prev || nextReading.stable || isNewReading) {
