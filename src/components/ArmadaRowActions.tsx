@@ -10,10 +10,15 @@ import ArmadaDeleteModal from "@/components/ArmadaDeleteModal";
 
 interface ArmadaRowActionsProps {
   vehicle: VehicleCardData;
+  canManage?: boolean;
   lpsOptions?: Array<{ id: number; name: string }>;
 }
 
-export default function ArmadaRowActions({ vehicle, lpsOptions = [] }: ArmadaRowActionsProps) {
+export default function ArmadaRowActions({
+  vehicle,
+  canManage = false,
+  lpsOptions = [],
+}: ArmadaRowActionsProps) {
   const [qrModalOpen, setQrModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
@@ -44,34 +49,37 @@ export default function ArmadaRowActions({ vehicle, lpsOptions = [] }: ArmadaRow
           whiteSpace: "nowrap",
         }}
       >
-        {/* Tombol Edit Armada (Update) */}
-        <button
-          type="button"
-          className="btn btn-secondary btn-sm"
-          onClick={() => setEditModalOpen(true)}
-          title="Edit data & perizinan armada"
-          style={{ padding: "5px 9px", gap: 4 }}
-        >
-          <Pencil size={13} /> Edit
-        </button>
+        {/* Khusus Super Admin: Tombol Edit & Hapus (CRUD) */}
+        {canManage && (
+          <>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => setEditModalOpen(true)}
+              title="Edit data & perizinan armada"
+              style={{ padding: "5px 9px", gap: 4 }}
+            >
+              <Pencil size={13} /> Edit
+            </button>
 
-        {/* Tombol Hapus Armada (Delete) */}
-        <button
-          type="button"
-          className="btn btn-sm"
-          onClick={() => setDeleteModalOpen(true)}
-          title="Hapus atau nonaktifkan armada"
-          style={{
-            padding: "5px 8px",
-            color: "var(--danger)",
-            backgroundColor: "#fff0f0",
-            border: "1px solid #fed7d7",
-          }}
-        >
-          <Trash2 size={13} />
-        </button>
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => setDeleteModalOpen(true)}
+              title="Hapus atau nonaktifkan armada"
+              style={{
+                padding: "5px 8px",
+                color: "var(--danger)",
+                backgroundColor: "#fff0f0",
+                border: "1px solid #fed7d7",
+              }}
+            >
+              <Trash2 size={13} />
+            </button>
+          </>
+        )}
 
-        {/* Tombol Buka Modal Preview & Unduh QR */}
+        {/* Tombol Buka Modal Preview & Unduh QR (Semua Role) */}
         <button
           type="button"
           className="btn btn-primary btn-sm"
@@ -82,7 +90,7 @@ export default function ArmadaRowActions({ vehicle, lpsOptions = [] }: ArmadaRow
           <QrCode size={13} /> QR
         </button>
 
-        {/* Tombol Unduh Cepat 1-Klik PNG */}
+        {/* Tombol Unduh Cepat 1-Klik PNG (Semua Role) */}
         <button
           type="button"
           className="btn btn-soft btn-sm"
@@ -94,7 +102,7 @@ export default function ArmadaRowActions({ vehicle, lpsOptions = [] }: ArmadaRow
           <Download size={13} />
         </button>
 
-        {/* Link ke Halaman Detail Armada (Read Detail) */}
+        {/* Link ke Halaman Detail Armada (Semua Role) */}
         <Link
           className="btn btn-secondary btn-sm"
           href={`/armada/${vehicle.id}`}
@@ -112,21 +120,24 @@ export default function ArmadaRowActions({ vehicle, lpsOptions = [] }: ArmadaRow
         onClose={() => setQrModalOpen(false)}
       />
 
-      {/* Modal Dialog Edit Armada (Update) */}
-      <ArmadaFormModal
-        isOpen={editModalOpen}
-        onClose={() => setEditModalOpen(false)}
-        mode="edit"
-        vehicle={vehicle}
-        lpsOptions={lpsOptions}
-      />
+      {/* Modal Dialog Edit & Hapus Armada (Hanya Super Admin) */}
+      {canManage && (
+        <>
+          <ArmadaFormModal
+            isOpen={editModalOpen}
+            onClose={() => setEditModalOpen(false)}
+            mode="edit"
+            vehicle={vehicle}
+            lpsOptions={lpsOptions}
+          />
 
-      {/* Modal Dialog Hapus Armada (Delete) */}
-      <ArmadaDeleteModal
-        isOpen={deleteModalOpen}
-        onClose={() => setDeleteModalOpen(false)}
-        vehicle={vehicle}
-      />
+          <ArmadaDeleteModal
+            isOpen={deleteModalOpen}
+            onClose={() => setDeleteModalOpen(false)}
+            vehicle={vehicle}
+          />
+        </>
+      )}
     </>
   );
 }

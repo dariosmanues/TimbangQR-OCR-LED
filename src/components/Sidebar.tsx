@@ -23,8 +23,19 @@ const items = [
   { href: "/perangkat", label: "Koneksi Timbangan", icon: Usb },
 ];
 
-export default function Sidebar({ userName, userEmail }: { userName: string; userEmail: string }) {
+export default function Sidebar({
+  userName,
+  userEmail,
+  userRole,
+}: {
+  userName: string;
+  userEmail: string;
+  userRole?: string;
+}) {
   const pathname = usePathname();
+  const roleUpper = (userRole || "").toUpperCase();
+  const isSuper = roleUpper === "SUPER_ADMIN" || roleUpper === "SUPERADMIN";
+  const isAdmin = roleUpper === "ADMIN" || roleUpper === "ADMINISTRATOR";
 
   return (
     <aside className="sidebar">
@@ -51,6 +62,45 @@ export default function Sidebar({ userName, userEmail }: { userName: string; use
       <div className="sidebar-user">
         <strong>{userName}</strong>
         <span>{userEmail}</span>
+        {userRole && (
+          <div style={{ marginTop: 6 }}>
+            {isSuper ? (
+              <span style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                padding: "2px 8px",
+                borderRadius: "12px",
+                fontSize: "11px",
+                fontWeight: 700,
+                backgroundColor: "#fef3c7",
+                color: "#92400e",
+                border: "1px solid #fde68a"
+              }}>
+                👑 Super Admin
+              </span>
+            ) : isAdmin ? (
+              <span style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                padding: "2px 8px",
+                borderRadius: "12px",
+                fontSize: "11px",
+                fontWeight: 600,
+                backgroundColor: "#eff6ff",
+                color: "#1e40af",
+                border: "1px solid #bfdbfe"
+              }}>
+                🛡️ Administrator
+              </span>
+            ) : (
+              <span className="badge" style={{ fontSize: "10px", padding: "1px 6px" }}>
+                {userRole}
+              </span>
+            )}
+          </div>
+        )}
       </div>
     </aside>
   );

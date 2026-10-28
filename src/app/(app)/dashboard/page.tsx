@@ -53,7 +53,7 @@ export default async function DashboardPage() {
 
       <div style={{ height: 18 }} />
 
-      {data.latestMonth === "2026-05" && data.reconciliation && data.reconciliation.differenceKg !== 0 && (
+      {data.reconciliation && data.reconciliation.differenceKg !== 0 && (
         <article className="card" style={{ borderColor: "#efc477", background: "#fffaf0" }}>
           <div className="card-body" style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
             <FileText size={22} color="#9c5c00" />

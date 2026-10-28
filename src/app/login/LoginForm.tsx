@@ -7,8 +7,8 @@ import { LogIn, Zap } from "lucide-react";
 export default function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [email, setEmail] = useState("admin@lps.local");
-  const [password, setPassword] = useState("Admin123!");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -88,19 +88,30 @@ export default function LoginForm() {
 
       <div className="field">
         <label>Email</label>
-        <input className="input" value={email} onChange={(e) => setEmail(e.target.value)} type="email" required />
+        <input
+          className="input"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          type="email"
+          placeholder="email@lps.local"
+          required
+        />
       </div>
       <div className="field">
         <label>Kata sandi</label>
-        <input className="input" value={password} onChange={(e) => setPassword(e.target.value)} type="password" required />
+        <input
+          className="input"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          type="password"
+          placeholder="••••••••"
+          required
+        />
       </div>
       {error && <div className="error">{error}</div>}
-      <button className="btn btn-primary" disabled={loading} type="submit">
+      <button className="btn btn-primary" disabled={loading} type="submit" style={{ marginTop: 8 }}>
         <LogIn size={18} /> {loading ? "Memeriksa..." : yoloUrlParam ? "Masuk & Lanjut ke Timbang" : "Masuk"}
       </button>
-      <div className="help">
-        Akun awal: <strong>admin@lps.local</strong> / <strong>Admin123!</strong>. Ganti lewat berkas <code>.env</code> sebelum database pertama kali dibuat.
-      </div>
     </form>
   );
 }

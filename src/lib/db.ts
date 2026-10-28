@@ -410,6 +410,42 @@ async function seedDatabase(client: PoolClient) {
   }
 }
 
+export async function ensureAdminUsers(client: PoolClient) {
+  const superAdminEmail = (process.env.SUPERADMIN_EMAIL || "superadmin@lps.local").trim();
+  const superAdminPassword = (process.env.SUPERADMIN_PASSWORD || "SuperAdmin123!").trim();
+
+  const adminEmail = (process.env.ADMIN_EMAIL || "admin@lps.local").trim();
+  const adminPassword = (process.env.ADMIN_PASSWORD || "Admin123!").trim();
+
+  // Super Admin (Satu-satunya role dengan hak akses CRUD)
+  await client.query(`
+    INSERT INTO users (email, name, password_hash, role, active)
+    VALUES ($1, 'Super Administrator LPS', $2, 'SUPER_ADMIN', TRUE)
+    ON CONFLICT (email) DO UPDATE SET
+      role = 'SUPER_ADMIN',
+      name = 'Super Administrator LPS',
+      password_hash = EXCLUDED.password_hash,
+      active = TRUE
+  `, [superAdminEmail, bcrypt.hashSync(superAdminPassword, 12)]);
+
+  // Administrator (Operasional / Read-Only, tanpa hak CRUD)
+  await client.query(`
+    INSERT INTO users (email, name, password_hash, role, active)
+    VALUES ($1, 'Administrator LPS', $2, 'ADMIN', TRUE)
+    ON CONFLICT (email) DO UPDATE SET
+      role = 'ADMIN',
+      password_hash = EXCLUDED.password_hash,
+      active = TRUE
+  `, [adminEmail, bcrypt.hashSync(adminPassword, 12)]);
+
+  // Hapus akun Admin Transaksi jika masih ada di database
+  await client.query(`
+    DELETE FROM users 
+    WHERE email = 'admin.transaksi@lps.local' 
+       OR role = 'ADMIN_TRANSAKSI'
+  `);
+}
+
 async function ensureSerialDevice(client: PoolClient) {
   const deviceKey = process.env.SERIAL_API_KEY || "serial-local-key-ganti-sebelum-produksi";
   await client.query(`
@@ -602,6 +638,7 @@ export async function ensureDatabase() {
       await client.query("BEGIN");
       await createSchema(client);
       await seedDatabase(client);
+      await ensureAdminUsers(client);
       await syncOct2026MasterArmada(client);
       await ensureSerialDevice(client);
       await client.query("COMMIT");

@@ -1,9 +1,10 @@
 import Link from "next/link";
-import { QrCode, Search, ShieldCheck, Truck, MapPin, Building2, User } from "lucide-react";
+import { QrCode, Search, ShieldCheck, Truck, MapPin, Building2, User, Crown } from "lucide-react";
 import VehicleCreateForm from "@/components/VehicleCreateForm";
 import VehicleStatusToggle from "@/components/VehicleStatusToggle";
 import ArmadaRowActions from "@/components/ArmadaRowActions";
 import ArmadaQuickQrModal from "@/components/ArmadaQuickQrModal";
+import { getSession, isSuperAdmin } from "@/lib/auth";
 import { getLpsList, listVehicles, getVehicleCounts } from "@/lib/queries";
 import { formatNumber } from "@/lib/utils";
 
@@ -13,8 +14,11 @@ export const dynamic = "force-dynamic";
 export default async function ArmadaPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; status?: "active" | "all" | "inactive" }>;
+  searchParams: Promise<{ q?: string; status?: "active" | "all" | "inactive" | "harapan_jaya" | "air_hitam" | "palas" }>;
 }) {
+  const user = await getSession();
+  const canCrud = isSuperAdmin(user);
+
   const params = await searchParams;
   const q = params.q || "";
   const filter = params.status || "active";
@@ -33,16 +37,35 @@ export default async function ArmadaPage({
               <ShieldCheck size={14} /> TPS WILAYAH HARAPAN JAYA
             </span>
             <span className="badge">UPDATE OKTOBER 2026</span>
+            {canCrud && (
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                  padding: "3px 8px",
+                  borderRadius: "12px",
+                  fontSize: 11,
+                  fontWeight: 700,
+                  backgroundColor: "#fef3c7",
+                  color: "#92400e",
+                  border: "1px solid #fde68a",
+                }}
+              >
+                <Crown size={12} /> Hak Akses: Super Admin (CRUD Armada Aktif)
+              </span>
+            )}
           </div>
           <h1>Master Armada</h1>
           <p>
-            {formatNumber(vehicles.length)} armada terdaftar dalam database jembatan timbang.
-            {filter === "active" && ` Menampilkan ${counts.active} armada resmi TPS Wilayah Harapan Jaya.`}
+            {formatNumber(vehicles.length)} armada terdaftar dalam database jembatan timbang Harapan Jaya
+            ({counts.harapanJaya || counts.active} Aktif).
+            {canCrud && " Anda dapat menambah, mengubah, dan menghapus data armada."}
           </p>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <ArmadaQuickQrModal vehicles={vehicles} />
-          <VehicleCreateForm lpsOptions={lps} />
+          {canCrud && <VehicleCreateForm lpsOptions={lps} />}
         </div>
       </div>
 
@@ -60,25 +83,27 @@ export default async function ArmadaPage({
           </button>
         </form>
 
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <Link
             href={`/armada?status=active${q ? `&q=${encodeURIComponent(q)}` : ""}`}
             className={`btn btn-sm ${filter === "active" ? "btn-primary" : "btn-secondary"}`}
           >
-            Harapan Jaya ({counts.active} Aktif)
+            Harapan Jaya ({counts.harapanJaya || counts.active} Aktif)
           </Link>
           <Link
             href={`/armada?status=all${q ? `&q=${encodeURIComponent(q)}` : ""}`}
             className={`btn btn-sm ${filter === "all" ? "btn-primary" : "btn-secondary"}`}
           >
-            Semua Data ({counts.total})
+            Total ({counts.total})
           </Link>
-          <Link
-            href={`/armada?status=inactive${q ? `&q=${encodeURIComponent(q)}` : ""}`}
-            className={`btn btn-sm ${filter === "inactive" ? "btn-primary" : "btn-secondary"}`}
-          >
-            Riwayat Nonaktif ({counts.inactive})
-          </Link>
+          {counts.inactive > 0 && (
+            <Link
+              href={`/armada?status=inactive${q ? `&q=${encodeURIComponent(q)}` : ""}`}
+              className={`btn btn-sm ${filter === "inactive" ? "btn-primary" : "btn-secondary"}`}
+            >
+              Nonaktif ({counts.inactive})
+            </Link>
+          )}
         </div>
       </div>
 
@@ -159,15 +184,24 @@ export default async function ArmadaPage({
                     )}
                   </td>
                   <td style={{ textAlign: "center" }}>
-                    <VehicleStatusToggle
-                      vehicleId={vehicle.id}
-                      initialActive={vehicle.active}
-                      plateNumber={vehicle.plate_number}
-                      code={vehicle.code}
-                    />
+                    {canCrud ? (
+                      <VehicleStatusToggle
+                        vehicleId={vehicle.id}
+                        initialActive={vehicle.active}
+                        plateNumber={vehicle.plate_number}
+                        code={vehicle.code}
+                      />
+                    ) : (
+                      <span
+                        className={`badge ${vehicle.active ? "green" : "gray"}`}
+                        style={{ fontSize: 11, padding: "3px 8px" }}
+                      >
+                        {vehicle.active ? "Aktif" : "Nonaktif"}
+                      </span>
+                    )}
                   </td>
                   <td className="num">
-                    <ArmadaRowActions vehicle={vehicle} lpsOptions={lps} />
+                    <ArmadaRowActions vehicle={vehicle} lpsOptions={lps} canManage={canCrud} />
                   </td>
                 </tr>
               ))}

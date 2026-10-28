@@ -9,7 +9,7 @@ export default async function ProtectedLayout({ children }: { children: React.Re
 
   return (
     <div className="app-shell">
-      <Sidebar userName={user.name} userEmail={user.email} />
+      <Sidebar userName={user.name} userEmail={user.email} userRole={user.role} />
       <main className="main">
         <AppTopbar />
         <div className="content">{children}</div>

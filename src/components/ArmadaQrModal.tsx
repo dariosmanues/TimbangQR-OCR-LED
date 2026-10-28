@@ -154,7 +154,7 @@ export default function ArmadaQrModal({ vehicle, isOpen, onClose }: ArmadaQrModa
                 <ShieldCheck size={12} /> QR MASTER RESMI
               </span>
               <span className="badge" style={{ fontSize: 11 }}>
-                TPS HARAPAN JAYA
+                {vehicle.lokasi_tps ? `TPS ${vehicle.lokasi_tps}` : "TPS HARAPAN JAYA"}
               </span>
             </div>
             <h2 style={{ margin: 0, fontSize: "19px", color: "var(--text)" }}>

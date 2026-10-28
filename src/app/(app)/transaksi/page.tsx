@@ -1,7 +1,12 @@
 import Link from "next/link";
-import { Filter, Search } from "lucide-react";
+import { Filter, Search, Camera, ShieldCheck, Crown } from "lucide-react";
+import { getSession, isSuperAdmin } from "@/lib/auth";
 import { getLpsList, listWeighings } from "@/lib/queries";
+import { dbQuery } from "@/lib/db";
 import { formatDateTime, formatNumber } from "@/lib/utils";
+import TransactionRowActions from "@/components/TransactionRowActions";
+import TransactionCreateButton from "@/components/TransactionCreateButton";
+import type { TransactionFormVehicle } from "@/components/TransactionFormModal";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,23 +16,87 @@ export default async function TransactionsPage({
 }: {
   searchParams: Promise<{ q?: string; month?: string; lps?: string }>;
 }) {
+  const user = await getSession();
+  const canManage = isSuperAdmin(user);
+
   const params = await searchParams;
   const q = params.q || "";
   const month = params.month || "";
   const lps = params.lps || "";
-  const [rows, lpsList] = await Promise.all([
+
+  const [rows, lpsList, vehicles] = await Promise.all([
     listWeighings({ search: q, month, lps, limit: 300 }),
     getLpsList(),
+    canManage
+      ? dbQuery<TransactionFormVehicle>(`
+          SELECT id, plate_number, code, vehicle_type, waste_type, default_tare_kg, nama_lps
+          FROM vehicles
+          WHERE active = TRUE
+          ORDER BY plate_number ASC
+        `)
+      : Promise.resolve([]),
   ]);
 
   return (
     <>
       <div className="page-head">
         <div>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+            {canManage ? (
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 5,
+                  padding: "3px 10px",
+                  borderRadius: "12px",
+                  fontSize: 11,
+                  fontWeight: 700,
+                  backgroundColor: "#fef3c7",
+                  color: "#92400e",
+                  border: "1px solid #fde68a",
+                }}
+              >
+                <Crown size={13} /> Hak Akses: Super Admin (CRUD Transaksi Aktif)
+              </span>
+            ) : (
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 5,
+                  padding: "3px 10px",
+                  borderRadius: "12px",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  backgroundColor: "#eff6ff",
+                  color: "#1e40af",
+                  border: "1px solid #bfdbfe",
+                }}
+              >
+                <ShieldCheck size={13} /> Hak Akses: Administrator (Hanya Baca / Read-Only)
+              </span>
+            )}
+          </div>
           <h1>Transaksi penimbangan</h1>
-          <p>Menampilkan maksimal 300 data sesuai filter.</p>
+          <p>
+            Menampilkan maksimal 300 data sesuai filter.
+            {canManage ? " Anda memiliki akses untuk Tambah, Edit, dan Hapus data transaksi." : " Mode hanya lihat transaksi (Read-Only)."}
+          </p>
         </div>
-        <Link className="btn btn-primary" href="/scan">Transaksi baru</Link>
+
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          {canManage && (
+            <TransactionCreateButton
+              lpsOptions={lpsList}
+              vehicleOptions={vehicles}
+            />
+          )}
+          <Link className="btn btn-secondary" href="/scan" style={{ gap: 6 }}>
+            <Camera size={16} />
+            <span>Scan & Timbang</span>
+          </Link>
+        </div>
       </div>
 
       <form className="card card-body" method="get" style={{ marginBottom: 18 }}>
@@ -68,7 +137,7 @@ export default async function TransactionsPage({
                 <th className="num">Netto 1</th>
                 <th className="num">Rafaksi</th>
                 <th className="num">Netto 2</th>
-                <th className="num">Aksi</th>
+                <th className="num" style={{ minWidth: canManage ? 160 : 80 }}>Aksi</th>
               </tr>
             </thead>
             <tbody>
@@ -84,10 +153,24 @@ export default async function TransactionsPage({
                   <td className="num">{formatNumber(row.netto_1_kg)}</td>
                   <td className="num">{formatNumber(row.rafaksi_kg)}</td>
                   <td className="num"><strong>{formatNumber(row.netto_2_kg)}</strong></td>
-                  <td className="num"><Link className="btn btn-soft btn-sm" href={`/transaksi/${row.id}`}>Tiket</Link></td>
+                  <td className="num">
+                    <TransactionRowActions
+                      weighing={row}
+                      canManage={canManage}
+                      lpsOptions={lpsList}
+                      vehicleOptions={vehicles}
+                    />
+                  </td>
                 </tr>
               ))}
-              {rows.length === 0 && <tr><td colSpan={11} className="empty"><Search size={28} /><p>Data tidak ditemukan.</p></td></tr>}
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={11} className="empty">
+                    <Search size={28} />
+                    <p>Data tidak ditemukan.</p>
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>

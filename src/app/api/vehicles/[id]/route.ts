@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getSession } from "@/lib/auth";
+import { getSession, isSuperAdmin } from "@/lib/auth";
 import { dbOne, dbQuery, withTransaction } from "@/lib/db";
 import { displayPlate, normalizePlate, toInt } from "@/lib/utils";
 import type { VehicleRow } from "@/lib/types";
@@ -41,6 +41,13 @@ export async function PATCH(
 ) {
   const user = await getSession();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  if (!isSuperAdmin(user)) {
+    return NextResponse.json(
+      { error: "Akses ditolak: Hanya Super Administrator yang memiliki izin mengubah data armada." },
+      { status: 403 }
+    );
+  }
 
   const { id } = await params;
   const vehicleId = Number(id);
@@ -273,6 +280,13 @@ export async function DELETE(
 ) {
   const user = await getSession();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  if (!isSuperAdmin(user)) {
+    return NextResponse.json(
+      { error: "Akses ditolak: Hanya Super Administrator yang memiliki izin menghapus data armada." },
+      { status: 403 }
+    );
+  }
 
   const { id } = await params;
   const vehicleId = Number(id);

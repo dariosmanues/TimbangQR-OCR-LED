@@ -3,7 +3,7 @@ import { unstable_cache } from "next/cache";
 import type { AssignmentRow, VehicleRow, WeighingRow } from "./types";
 
 const appTimeZone = (process.env.APP_TIMEZONE || "Asia/Jakarta").trim();
-export const DATA_START_DATE = (process.env.DATA_START_DATE || "2026-10-12").trim();
+export const DATA_START_DATE = (process.env.DATA_START_DATE || "2026-10-01").trim();
 
 async function getDashboardDataUncached() {
   const latestMonthRow = await dbOne<{ month: string }>(`
@@ -108,7 +108,10 @@ export async function getDashboardData() {
   return getDashboardDataUncached();
 }
 
-export async function listVehicles(search = "", filter: "active" | "all" | "inactive" = "active") {
+export async function listVehicles(
+  search = "",
+  filter: "active" | "all" | "inactive" | "harapan_jaya" | "air_hitam" | "palas" = "active"
+) {
   const term = `%${search.trim()}%`;
   return dbQuery<VehicleRow>(`
     SELECT
@@ -133,6 +136,9 @@ export async function listVehicles(search = "", filter: "active" | "all" | "inac
         $2 = 'all'
         OR ($2 = 'active' AND v.active = TRUE)
         OR ($2 = 'inactive' AND v.active = FALSE)
+        OR ($2 = 'harapan_jaya' AND v.lokasi_tps = 'HARAPAN JAYA' AND v.active = TRUE)
+        OR ($2 = 'air_hitam' AND v.lokasi_tps = 'AIR HITAM' AND v.active = TRUE)
+        OR ($2 = 'palas' AND v.lokasi_tps = 'PALAS' AND v.active = TRUE)
       )
     GROUP BY v.id
     ORDER BY v.no_urut ASC NULLS LAST, v.code ASC
@@ -177,7 +183,8 @@ export async function listWeighings(filters: {
 
   return dbQuery<WeighingRow>(`
     SELECT id, ticket_number, weighed_at, plate_number, driver_name, lps_name,
-      gross_kg, tare_kg, netto_1_kg, rafaksi_kg, netto_2_kg, ritasi, tare_source, status
+      gross_kg, tare_kg, netto_1_kg, rafaksi_kg, netto_2_kg, ritasi, tare_source, status,
+      vehicle_id, lps_id, vehicle_type, waste_type, source_note
     FROM weighings
     WHERE ($1 = '%%'
       OR ticket_number ILIKE $1
@@ -209,14 +216,24 @@ export async function getLpsList() {
 }
 
 export async function getVehicleCounts() {
-  const row = await dbOne<{ total: number; active: number; inactive: number }>(`
+  const row = await dbOne<{
+    total: number;
+    active: number;
+    inactive: number;
+    harapanJaya: number;
+    airHitam: number;
+    palas: number;
+  }>(`
     SELECT
       COUNT(*)::int AS total,
       COUNT(*) FILTER (WHERE active = TRUE)::int AS active,
-      COUNT(*) FILTER (WHERE active = FALSE)::int AS inactive
+      COUNT(*) FILTER (WHERE active = FALSE)::int AS inactive,
+      COUNT(*) FILTER (WHERE lokasi_tps = 'HARAPAN JAYA' AND active = TRUE)::int AS "harapanJaya",
+      COUNT(*) FILTER (WHERE lokasi_tps = 'AIR HITAM' AND active = TRUE)::int AS "airHitam",
+      COUNT(*) FILTER (WHERE lokasi_tps = 'PALAS' AND active = TRUE)::int AS "palas"
     FROM vehicles
   `);
-  return row || { total: 0, active: 0, inactive: 0 };
+  return row || { total: 0, active: 0, inactive: 0, harapanJaya: 0, airHitam: 0, palas: 0 };
 }
 
 async function getDeviceListUncached() {
