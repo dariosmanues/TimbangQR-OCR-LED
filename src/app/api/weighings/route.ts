@@ -16,7 +16,8 @@ const schema = z.object({
   tareKg: z.coerce.number().int().nonnegative(),
   rafaksiKg: z.coerce.number().int().nonnegative().default(0),
   tareSource: z.enum(["DATABASE", "ACTUAL_WEIGHING", "MANUAL"]).default("DATABASE"),
-  measurementSource: z.enum(["OCR_LED", "MANUAL"]).default("OCR_LED"),
+  measurementSource: z.enum(["SERIAL_BRIDGE", "DIRECT_SERIAL", "APPLICATION", "OCR_LED", "MANUAL"]).default("SERIAL_BRIDGE"),
+  deviceId: z.coerce.number().int().positive().nullable().optional(),
   ocrStable: z.boolean().optional(),
   indicatorRaw: z.string().max(2000).optional().default(""),
   qrToken: z.string().max(255).optional().default(""),
@@ -57,13 +58,6 @@ export async function POST(request: Request) {
           { status: 403 }
         );
       }
-    } else {
-      if (!input.indicatorRaw.startsWith("OCR_LED:")) {
-        return NextResponse.json(
-          { error: "Pembacaan OCR LED tidak valid. Arahkan kamera ke display LED sampai status stabil." },
-          { status: 400 }
-        );
-      }
     }
 
     if (input.grossKg <= input.tareKg) {
@@ -99,8 +93,18 @@ export async function POST(request: Request) {
       const weighedAt = input.weighedAt && !isNaN(new Date(input.weighedAt).getTime())
         ? new Date(input.weighedAt).toISOString()
         : jakartaIsoNow();
-      const source = input.measurementSource === "MANUAL" ? "MANUAL" : "OCR_LED";
-      const sourceNote = input.sourceNote?.trim() || (input.measurementSource === "MANUAL" ? "Input manual oleh Super Admin / Admin" : null);
+      const source = input.measurementSource === "MANUAL"
+        ? "MANUAL"
+        : input.measurementSource === "OCR_LED"
+          ? "OCR_LED"
+          : "APPLICATION";
+      const sourceNote = input.sourceNote?.trim() || (
+        input.measurementSource === "MANUAL"
+          ? "Input manual oleh Super Admin / Admin"
+          : input.measurementSource === "SERIAL_BRIDGE" || input.measurementSource === "DIRECT_SERIAL"
+            ? "TimbangQR Bridge (RS232/RS485)"
+            : null
+      );
 
       const inserted = await client.query<{ id: number }>(`
         INSERT INTO weighings (
@@ -110,8 +114,8 @@ export async function POST(request: Request) {
           source_note, created_by, qr_token
         ) VALUES (
           $1, $2::timestamptz, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-          $12, $13, $14, 1, $15, NULL, $16, 'COMPLETED', $17,
-          $18, $19, $20
+          $12, $13, $14, 1, $15, $16, $17, 'COMPLETED', $18,
+          $19, $20, $21
         )
         RETURNING id
       `, [
@@ -130,6 +134,7 @@ export async function POST(request: Request) {
         input.rafaksiKg,
         netto2,
         input.tareSource,
+        input.deviceId || null,
         input.indicatorRaw || null,
         source,
         sourceNote,
@@ -171,6 +176,7 @@ export async function POST(request: Request) {
         tareKg: input.tareKg,
         netto2Kg: netto2,
         measurementSource: input.measurementSource,
+        deviceId: input.deviceId || null,
         qrToken: input.qrToken || null,
       })]);
 

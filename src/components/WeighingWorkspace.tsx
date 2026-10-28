@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { CheckCircle2, RefreshCw, Save, Scale, Truck } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Cable, CheckCircle2, Cloud, RefreshCw, Save, Truck } from "lucide-react";
 import QrScanner from "./QrScanner";
 import LedWeightScanner, { type LedWeightReading } from "./LedWeightScanner";
 
@@ -33,6 +33,37 @@ type VehiclePayload = {
   masterCreated?: boolean;
 };
 
+type SerialBridgeReading = {
+  id: number;
+  device_id: number;
+  device_code: string;
+  weight_kg: number;
+  stable: boolean;
+  indicator_raw: string | null;
+  recorded_at: string;
+};
+
+type SerialBridgeDevice = {
+  id: number;
+  device_code: string;
+  location_name: string;
+  port_name: string | null;
+  connection_type: string;
+  baud_rate: number;
+  last_seen_at: string | null;
+  active: boolean;
+};
+
+function formatTimeId(value?: string | null) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return new Intl.DateTimeFormat("id-ID", {
+    dateStyle: "short",
+    timeStyle: "medium",
+  }).format(date);
+}
+
 export default function WeighingWorkspace({ initialToken = "" }: { initialToken?: string }) {
   const [token, setToken] = useState(initialToken);
   const [payload, setPayload] = useState<VehiclePayload | null>(null);
@@ -40,6 +71,16 @@ export default function WeighingWorkspace({ initialToken = "" }: { initialToken?
   const [armadaChoices, setArmadaChoices] = useState<Array<{ no: number; plate: string; lps: string }>>([]);
   const [message, setMessage] = useState("");
   const [ocrReading, setOcrReading] = useState<LedWeightReading | null>(null);
+
+  // TimbangQR Bridge (RS232/RS485) live state
+  const [serialReading, setSerialReading] = useState<SerialBridgeReading | null>(null);
+  const [serialDevice, setSerialDevice] = useState<SerialBridgeDevice | null>(null);
+  const [bridgeLastSeen, setBridgeLastSeen] = useState<string | null>(null);
+  const [bridgeOnline, setBridgeOnline] = useState(false);
+  const [loadingBridge, setLoadingBridge] = useState(false);
+  const [activeSource, setActiveSource] = useState<"SERIAL_BRIDGE" | "OCR_LED">("SERIAL_BRIDGE");
+  const lastAppliedReadingIdRef = useRef<number | null>(null);
+
   const [lpsId, setLpsId] = useState("");
   const [driverName, setDriverName] = useState("");
   const [grossKg, setGrossKg] = useState("");
@@ -49,6 +90,58 @@ export default function WeighingWorkspace({ initialToken = "" }: { initialToken?
   const [scannedQrToken, setScannedQrToken] = useState("");
   const [saving, setSaving] = useState(false);
   const [result, setResult] = useState<{ ticketNumber: string; netto2Kg: number } | null>(null);
+
+  const refreshBridge = useCallback(async (silent = false) => {
+    if (!silent) setLoadingBridge(true);
+    try {
+      const response = await fetch("/api/serial/latest", { cache: "no-store" });
+      if (!response.ok) return;
+      const data = await response.json();
+      const nextReading = (data.reading || null) as SerialBridgeReading | null;
+      const nextDevice = (data.device || null) as SerialBridgeDevice | null;
+      const lastSeen = data.lastSeenAt || nextDevice?.last_seen_at || nextReading?.recorded_at || null;
+      const isOnline = Boolean(
+        data.bridgeOnline ||
+          (lastSeen && !Number.isNaN(Date.parse(lastSeen)) && Date.now() - Date.parse(lastSeen) <= 15 * 60 * 1000)
+      );
+
+      setSerialReading(nextReading);
+      setSerialDevice(nextDevice);
+      setBridgeLastSeen(lastSeen);
+      setBridgeOnline(isOnline);
+
+      if (nextReading && nextReading.weight_kg > 0) {
+        const isRecentReading =
+          !nextReading.recorded_at ||
+          Date.now() - Date.parse(nextReading.recorded_at) <= 10 * 60 * 1000;
+        const isNewReading = lastAppliedReadingIdRef.current !== nextReading.id;
+
+        if (isRecentReading && (isNewReading || nextReading.stable)) {
+          lastAppliedReadingIdRef.current = nextReading.id;
+          setGrossKg((prev) => {
+            if (!prev || nextReading.stable || isNewReading) {
+              setActiveSource("SERIAL_BRIDGE");
+              return String(nextReading.weight_kg);
+            }
+            return prev;
+          });
+        }
+      }
+    } catch {
+      // Ignore transient polling error
+    } finally {
+      if (!silent) setLoadingBridge(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const initial = window.setTimeout(() => void refreshBridge(false), 0);
+    const interval = window.setInterval(() => void refreshBridge(true), 1500);
+    return () => {
+      window.clearTimeout(initial);
+      window.clearInterval(interval);
+    };
+  }, [refreshBridge]);
 
   const loadVehicle = useCallback(async (nextToken: string, selectedMasterNo?: number) => {
     if (!nextToken) return;
@@ -103,6 +196,7 @@ export default function WeighingWorkspace({ initialToken = "" }: { initialToken?
     setOcrReading(reading);
     if (reading && reading.weightKg > 0) {
       if (reading.stable || !grossKg) {
+        setActiveSource("OCR_LED");
         setGrossKg(String(reading.weightKg));
       }
     }
@@ -134,7 +228,7 @@ export default function WeighingWorkspace({ initialToken = "" }: { initialToken?
     }
   }
 
-  async function performSave(overrideGross?: number) {
+  async function performSave(overrideGross?: number, overrideSource?: "SERIAL_BRIDGE" | "OCR_LED") {
     if (!payload) {
       setMessage("Silakan pindai QR armada terlebih dahulu.");
       return;
@@ -166,6 +260,15 @@ export default function WeighingWorkspace({ initialToken = "" }: { initialToken?
     setMessage("");
     setResult(null);
 
+    const usedSource = overrideSource || (
+      activeSource === "OCR_LED" && ocrReading?.weightKg === currentGross
+        ? "OCR_LED"
+        : "SERIAL_BRIDGE"
+    );
+    const indicatorRawValue = usedSource === "OCR_LED"
+      ? (ocrReading?.raw || `OCR_LED:CONFIRMED:${currentGross}`)
+      : (serialReading?.indicator_raw || `SERIAL_BRIDGE:${currentGross}`);
+
     try {
       const response = await fetch("/api/weighings", {
         method: "POST",
@@ -178,13 +281,17 @@ export default function WeighingWorkspace({ initialToken = "" }: { initialToken?
           tareKg: currentTare,
           rafaksiKg: currentRafaksi,
           tareSource,
-          measurementSource: "OCR_LED",
-          ocrStable: true,
-          indicatorRaw: ocrReading?.raw || `OCR_LED:CONFIRMED:${currentGross}`,
+          measurementSource: usedSource,
+          deviceId: serialDevice?.id || serialReading?.device_id || null,
+          ocrStable: usedSource === "OCR_LED" ? Boolean(ocrReading?.stable ?? true) : Boolean(serialReading?.stable ?? true),
+          indicatorRaw: indicatorRawValue,
           qrToken: scannedQrToken || token,
         }),
       });
       const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "Transaksi gagal disimpan");
+      }
       const tokenUsed = scannedQrToken || token;
       const isMaster = /^ARMADA-/i.test(tokenUsed) || !tokenUsed.toUpperCase().startsWith("LPS-");
       setResult({ ticketNumber: data.ticketNumber, netto2Kg: data.netto2Kg });
@@ -210,21 +317,103 @@ export default function WeighingWorkspace({ initialToken = "" }: { initialToken?
     await performSave();
   }
 
+  const displayedGross = Number(grossKg) || serialReading?.weight_kg || ocrReading?.weightKg || 0;
+  const deviceCode = serialDevice?.device_code || serialReading?.device_code || "TIMBANG-HJ-SERIAL-01";
+  const portLabel = serialDevice?.port_name
+    ? `${serialDevice.port_name} · ${serialDevice.connection_type || "RS232"}`
+    : `RS232 / RS485`;
+
   return (
     <div className="scan-layout">
+      {/* PANEL STATUS TIMBANGQR BRIDGE (RS232/RS485) */}
+      <div className="card weighing-data-card">
+        <div className="card-head">
+          <div>
+            <h2>Koneksi TimbangQR Bridge (Indikator RS232 / RS485)</h2>
+            <p>Terhubung otomatis dengan aplikasi TimbangQR Bridge di PC Operator untuk menerima berat indikator secara langsung.</p>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span className={`badge ${bridgeOnline ? "green" : "orange"}`}>
+              <span className="dot" />
+              {bridgeOnline ? "TimbangQR Bridge Online" : "Menunggu Sinyal Bridge"}
+            </span>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              style={{ padding: "6px 12px", minHeight: 34, fontSize: 12 }}
+              onClick={() => void refreshBridge(false)}
+              disabled={loadingBridge}
+            >
+              <RefreshCw size={14} /> {loadingBridge ? "Memuat..." : "Segarkan Bridge"}
+            </button>
+          </div>
+        </div>
+        <div className="card-body">
+          <div className="summary-box">
+            <div className="summary-item">
+              <span>Perangkat & Port</span>
+              <strong style={{ fontSize: 15 }}>
+                <Cable size={14} style={{ verticalAlign: "middle", marginRight: 5 }} />
+                {deviceCode} ({portLabel})
+              </strong>
+            </div>
+            <div className="summary-item">
+              <span>Berat dari Bridge</span>
+              <strong style={{ color: bridgeOnline ? "var(--primary)" : undefined }}>
+                {serialReading?.weight_kg != null
+                  ? `${new Intl.NumberFormat("id-ID").format(serialReading.weight_kg)} kg`
+                  : "0 kg"}{" "}
+                <small style={{ fontSize: 11, fontWeight: 700, opacity: 0.8 }}>
+                  ({serialReading?.stable ? "STABIL" : bridgeOnline ? "SIAP / AKTIF" : "BELUM ADA DATA"})
+                </small>
+              </strong>
+            </div>
+            <div className="summary-item">
+              <span>Sinyal Terakhir Diterima</span>
+              <strong style={{ fontSize: 14 }}>
+                <Cloud size={14} style={{ verticalAlign: "middle", marginRight: 5 }} />
+                {formatTimeId(bridgeLastSeen)}
+              </strong>
+            </div>
+          </div>
+
+          {serialReading && serialReading.weight_kg > 0 && (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
+              <span className="help">
+                String indikator terakhir: <code>{serialReading.indicator_raw || "-"}</code>
+              </span>
+              <button
+                type="button"
+                className="btn btn-primary"
+                style={{ padding: "7px 14px", minHeight: 34, fontSize: 12 }}
+                onClick={() => {
+                  setActiveSource("SERIAL_BRIDGE");
+                  setGrossKg(String(serialReading.weight_kg));
+                  setMessage(`✓ Berat ${serialReading.weight_kg} kg diambil dari TimbangQR Bridge.`);
+                }}
+              >
+                Gunakan Berat Bridge ({new Intl.NumberFormat("id-ID").format(serialReading.weight_kg)} kg)
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
       <QrScanner onToken={loadVehicle} />
 
       <LedWeightScanner
         onReading={handleOcrReading}
         onLockWeight={(weightKg) => {
+          setActiveSource("OCR_LED");
           setGrossKg(String(weightKg));
           setMessage(`✓ Angka gross ${weightKg} KG dikunci dari OCR.`);
         }}
         onSaveWeight={
           payload && lpsId
             ? (weightKg) => {
+                setActiveSource("OCR_LED");
                 setGrossKg(String(weightKg));
-                void performSave(weightKg);
+                void performSave(weightKg, "OCR_LED");
               }
             : undefined
         }
@@ -235,18 +424,22 @@ export default function WeighingWorkspace({ initialToken = "" }: { initialToken?
         <div className="card-head">
           <div>
             <h2>3. Data dan berat armada</h2>
-            <p>Nilai Gross diambil dari pembacaan OCR LED timbangan (YOLO AI) yang sudah tepat.</p>
+            <p>Nilai Gross otomatis terisi dari TimbangQR Bridge (RS232/RS485) atau pembacaan Kamera OCR LED timbangan.</p>
           </div>
           {payload && <span className="badge green"><CheckCircle2 size={13} /> QR valid</span>}
         </div>
         <div className="card-body">
           <div className="weight-display">
             <div>
-              <strong>{new Intl.NumberFormat("id-ID").format(Number(grossKg) || ocrReading?.weightKg || 0)}</strong>
+              <strong>{new Intl.NumberFormat("id-ID").format(displayedGross)}</strong>
               <span>
-                {Number(grossKg) > 0
-                  ? (ocrReading?.stable ? "OCR LED STABIL · KG" : "GROSS TERKONFIRMASI · KG")
-                  : "MENUNGGU ANGKA OCR TEPAT · KG"}
+                {displayedGross > 0
+                  ? activeSource === "SERIAL_BRIDGE" && serialReading?.weight_kg === displayedGross
+                    ? (serialReading.stable ? "TIMBANGQR BRIDGE STABIL · KG" : "TIMBANGQR BRIDGE · KG")
+                    : (ocrReading?.stable ? "OCR LED STABIL · KG" : "GROSS TERKONFIRMASI · KG")
+                  : bridgeOnline
+                    ? "TIMBANGQR BRIDGE TERHUBUNG (0 KG) · MENUNGGU BEBAN TIMBANGAN"
+                    : "MENUNGGU BEBAN DARI TIMBANGQR BRIDGE / OCR LED · KG"}
               </span>
             </div>
           </div>
@@ -316,18 +509,36 @@ export default function WeighingWorkspace({ initialToken = "" }: { initialToken?
                   <input className="input" value={driverName} onChange={(e) => setDriverName(e.target.value)} />
                 </div>
                 <div className="field">
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                     <label>Gross (kg)</label>
-                    {ocrReading && ocrReading.weightKg > 0 && String(ocrReading.weightKg) !== grossKg && (
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-secondary"
-                        onClick={() => setGrossKg(String(ocrReading.weightKg))}
-                        style={{ fontSize: 11, padding: "2px 8px", minHeight: 24 }}
-                      >
-                        Pakai OCR: {ocrReading.weightKg} kg
-                      </button>
-                    )}
+                    <div style={{ display: "flex", gap: 6 }}>
+                      {serialReading && serialReading.weight_kg > 0 && String(serialReading.weight_kg) !== grossKg && (
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-secondary"
+                          onClick={() => {
+                            setActiveSource("SERIAL_BRIDGE");
+                            setGrossKg(String(serialReading.weight_kg));
+                          }}
+                          style={{ fontSize: 11, padding: "2px 8px", minHeight: 24 }}
+                        >
+                          Pakai Bridge: {serialReading.weight_kg} kg
+                        </button>
+                      )}
+                      {ocrReading && ocrReading.weightKg > 0 && String(ocrReading.weightKg) !== grossKg && (
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-secondary"
+                          onClick={() => {
+                            setActiveSource("OCR_LED");
+                            setGrossKg(String(ocrReading.weightKg));
+                          }}
+                          style={{ fontSize: 11, padding: "2px 8px", minHeight: 24 }}
+                        >
+                          Pakai OCR: {ocrReading.weightKg} kg
+                        </button>
+                      )}
+                    </div>
                   </div>
                   <input
                     className="input"
@@ -337,7 +548,7 @@ export default function WeighingWorkspace({ initialToken = "" }: { initialToken?
                     onChange={(e) => setGrossKg(e.target.value)}
                     required
                   />
-                  <span className="help">Diisi otomatis dari OCR LED merah (dapat diedit atau disesuaikan).</span>
+                  <span className="help">Diisi otomatis dari TimbangQR Bridge atau OCR LED (dapat disesuaikan).</span>
                 </div>
                 <div className="field">
                   <label>Sumber tare</label>
@@ -364,7 +575,7 @@ export default function WeighingWorkspace({ initialToken = "" }: { initialToken?
                 <div className="summary-item"><span>Netto 2</span><strong>{new Intl.NumberFormat("id-ID").format(calculated.netto2)} kg</strong></div>
               </div>
 
-              {message && <p className={message.includes("berhasil") ? "success" : "error"}>{message}</p>}
+              {message && <p className={message.includes("berhasil") || message.startsWith("✓") ? "success" : "error"}>{message}</p>}
               {result && (
                 <div className="badge green" style={{ padding: 12, borderRadius: 12 }}>
                   Tiket {result.ticketNumber} tersimpan · Netto 2 {new Intl.NumberFormat("id-ID").format(result.netto2Kg)} kg
