@@ -228,9 +228,21 @@ async function createSchema(client: PoolClient) {
       status TEXT NOT NULL DEFAULT 'COMPLETED',
       source TEXT NOT NULL DEFAULT 'APPLICATION',
       source_note TEXT,
+      qr_token TEXT,
       created_by INTEGER REFERENCES users(id),
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    ALTER TABLE weighings ADD COLUMN IF NOT EXISTS qr_token TEXT;
+
+    CREATE TABLE IF NOT EXISTS burned_qr_tokens (
+      qr_token TEXT PRIMARY KEY,
+      plate_number TEXT NOT NULL,
+      ticket_number TEXT,
+      vehicle_id INTEGER REFERENCES vehicles(id),
+      burned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
     CREATE TABLE IF NOT EXISTS audit_logs (
@@ -255,6 +267,7 @@ async function createSchema(client: PoolClient) {
     CREATE INDEX IF NOT EXISTS idx_weighings_ticket ON weighings(ticket_number);
     CREATE INDEX IF NOT EXISTS idx_weighings_lps ON weighings(lps_id);
     CREATE INDEX IF NOT EXISTS idx_weighings_vehicle ON weighings(vehicle_id);
+    CREATE INDEX IF NOT EXISTS idx_weighings_qr_token ON weighings(qr_token) WHERE qr_token IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_readings_device_date ON device_readings(device_id, recorded_at DESC);
     CREATE INDEX IF NOT EXISTS idx_assignments_vehicle ON vehicle_assignments(vehicle_id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_primary_assignment_per_vehicle
