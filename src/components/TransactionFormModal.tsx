@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { X, Gauge, Save, AlertCircle, CheckCircle2, Scale, Truck, Calendar, User, Info } from "lucide-react";
 import type { WeighingRow } from "@/lib/types";
+import { findVehicleByPlate } from "@/lib/vehicle-selection";
 
 export interface TransactionFormVehicle {
   id: number;
@@ -55,68 +56,36 @@ export default function TransactionFormModal({
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   // Form State
-  const [vehicleId, setVehicleId] = useState<string>("");
-  const [plateNumber, setPlateNumber] = useState("");
-  const [driverName, setDriverName] = useState("");
-  const [lpsId, setLpsId] = useState<string>("");
-  const [vehicleType, setVehicleType] = useState("PICKUP");
-  const [wasteType, setWasteType] = useState("SAMPAH RUMAH TANGGA");
+  // The component mounts only when its dialog opens, so form values can be
+  // derived once here instead of synchronously resetting state in an effect.
+  const editWeighing = mode === "edit" ? weighing : null;
+  const matchedLps = editWeighing && !editWeighing.lps_id
+    ? lpsOptions.find(
+        (lps) => lps.name.toLowerCase().trim() === (editWeighing.lps_name || "").toLowerCase().trim()
+      )
+    : null;
+  const [vehicleId, setVehicleId] = useState<string>(() =>
+    editWeighing?.vehicle_id ? String(editWeighing.vehicle_id) : ""
+  );
+  const [plateNumber, setPlateNumber] = useState(() => editWeighing?.plate_number || "");
+  const [driverName, setDriverName] = useState(() => editWeighing?.driver_name || "");
+  const [lpsId, setLpsId] = useState<string>(() => {
+    if (editWeighing?.lps_id) return String(editWeighing.lps_id);
+    if (matchedLps) return String(matchedLps.id);
+    return lpsOptions[0]?.id ? String(lpsOptions[0].id) : "";
+  });
+  const [vehicleType, setVehicleType] = useState(() => editWeighing?.vehicle_type || "PICKUP");
+  const [wasteType, setWasteType] = useState(() => editWeighing?.waste_type || "SAMPAH RUMAH TANGGA");
 
-  const [grossKg, setGrossKg] = useState<string>("");
-  const [tareKg, setTareKg] = useState<string>("");
-  const [rafaksiKg, setRafaksiKg] = useState<string>("0");
-  const [tareSource, setTareSource] = useState<string>("DATABASE");
-  const [status, setStatus] = useState<string>("COMPLETED");
-  const [weighedAt, setWeighedAt] = useState<string>("");
-  const [sourceNote, setSourceNote] = useState<string>("");
-
-  useEffect(() => {
-    if (!isOpen) {
-      setError(null);
-      setSuccessMsg(null);
-      return;
-    }
-
-    if (mode === "edit" && weighing) {
-      setVehicleId(weighing.vehicle_id ? String(weighing.vehicle_id) : "");
-      setPlateNumber(weighing.plate_number || "");
-      setDriverName(weighing.driver_name || "");
-      setVehicleType(weighing.vehicle_type || "PICKUP");
-      setWasteType(weighing.waste_type || "SAMPAH RUMAH TANGGA");
-      setGrossKg(String(weighing.gross_kg || ""));
-      setTareKg(String(weighing.tare_kg || ""));
-      setRafaksiKg(String(weighing.rafaksi_kg ?? 0));
-      setTareSource(weighing.tare_source || "DATABASE");
-      setStatus(weighing.status || "COMPLETED");
-      setWeighedAt(toLocalDatetimeString(weighing.weighed_at));
-      setSourceNote(weighing.source_note || "");
-
-      // Match LPS
-      if (weighing.lps_id) {
-        setLpsId(String(weighing.lps_id));
-      } else {
-        const matchedLps = lpsOptions.find(
-          (l) => l.name.toLowerCase().trim() === (weighing.lps_name || "").toLowerCase().trim()
-        );
-        setLpsId(matchedLps ? String(matchedLps.id) : "");
-      }
-    } else {
-      // Create mode default
-      setVehicleId("");
-      setPlateNumber("");
-      setDriverName("");
-      setLpsId(lpsOptions[0]?.id ? String(lpsOptions[0].id) : "");
-      setVehicleType("PICKUP");
-      setWasteType("SAMPAH RUMAH TANGGA");
-      setGrossKg("");
-      setTareKg("");
-      setRafaksiKg("0");
-      setTareSource("DATABASE");
-      setStatus("COMPLETED");
-      setWeighedAt(toLocalDatetimeString(null));
-      setSourceNote("Input manual oleh Super Admin / Admin");
-    }
-  }, [isOpen, mode, weighing, lpsOptions]);
+  const [grossKg, setGrossKg] = useState<string>(() => String(editWeighing?.gross_kg || ""));
+  const [tareKg, setTareKg] = useState<string>(() => String(editWeighing?.tare_kg || ""));
+  const [rafaksiKg, setRafaksiKg] = useState<string>(() => String(editWeighing?.rafaksi_kg ?? 0));
+  const [tareSource, setTareSource] = useState<string>(() => editWeighing?.tare_source || "DATABASE");
+  const [status, setStatus] = useState<string>(() => editWeighing?.status || "COMPLETED");
+  const [weighedAt, setWeighedAt] = useState<string>(() => toLocalDatetimeString(editWeighing?.weighed_at));
+  const [sourceNote, setSourceNote] = useState<string>(() =>
+    editWeighing ? editWeighing.source_note || "" : "Input manual oleh Super Admin / Admin"
+  );
 
   // Handle vehicle dropdown selection
   function handleVehicleSelect(selectedId: string) {
@@ -172,15 +141,21 @@ export default function TransactionFormModal({
 
     try {
       if (mode === "create") {
-        if (!vehicleId && !plateNumber) {
-          throw new Error("Pilih armada atau masukkan nomor polisi.");
+        const selectedVehicle = vehicleId
+          ? vehicleOptions.find((vehicle) => vehicle.id === Number(vehicleId)) ?? null
+          : findVehicleByPlate(plateNumber, vehicleOptions);
+
+        if (!selectedVehicle) {
+          throw new Error(
+            "Pilih armada terdaftar atau masukkan nomor polisi yang terdaftar di Master Armada."
+          );
         }
         if (!lpsId) {
           throw new Error("Pilih LPS penanggung jawab.");
         }
 
         const payload = {
-          vehicleId: Number(vehicleId) || (vehicleOptions[0]?.id ?? 1),
+          vehicleId: selectedVehicle.id,
           lpsId: Number(lpsId),
           driverName: driverName.trim(),
           grossKg: numGross,
@@ -398,7 +373,7 @@ export default function TransactionFormModal({
                     value={vehicleId}
                     onChange={(e) => handleVehicleSelect(e.target.value)}
                   >
-                    <option value="">-- Pilih armada atau ketik manual di bawah --</option>
+                    <option value="">-- Pilih armada atau ketik plat yang sudah terdaftar --</option>
                     {vehicleOptions.map((v) => (
                       <option key={v.id} value={v.id}>
                         {v.plate_number} ({v.code}) - {v.nama_lps || "Umum"} {v.default_tare_kg ? `[Tare: ${v.default_tare_kg} kg]` : ""}

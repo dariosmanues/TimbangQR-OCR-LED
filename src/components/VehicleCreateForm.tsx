@@ -22,12 +22,14 @@ export default function VehicleCreateForm({ lpsOptions }: VehicleCreateFormProps
         <Plus size={18} /> Tambah Armada
       </button>
 
-      <ArmadaFormModal
-        isOpen={modalOpen}
-        onClose={() => setModalOpen(false)}
-        mode="create"
-        lpsOptions={lpsOptions}
-      />
+      {modalOpen && (
+        <ArmadaFormModal
+          isOpen
+          onClose={() => setModalOpen(false)}
+          mode="create"
+          lpsOptions={lpsOptions}
+        />
+      )}
     </>
   );
 }

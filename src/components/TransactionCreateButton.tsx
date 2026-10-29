@@ -27,13 +27,15 @@ export default function TransactionCreateButton({
         <span>Transaksi Manual</span>
       </button>
 
-      <TransactionFormModal
-        isOpen={modalOpen}
-        onClose={() => setModalOpen(false)}
-        mode="create"
-        lpsOptions={lpsOptions}
-        vehicleOptions={vehicleOptions}
-      />
+      {modalOpen && (
+        <TransactionFormModal
+          isOpen
+          onClose={() => setModalOpen(false)}
+          mode="create"
+          lpsOptions={lpsOptions}
+          vehicleOptions={vehicleOptions}
+        />
+      )}
     </>
   );
 }

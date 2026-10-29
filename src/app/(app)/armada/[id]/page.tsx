@@ -36,6 +36,7 @@ export default async function VehicleDetailPage({ params }: { params: Promise<{ 
             <h1 style={{ margin: 0 }}>{vehicle.plate_number}</h1>
             {canCrud ? (
               <VehicleStatusToggle
+                key={`${vehicle.id}-${vehicle.active}`}
                 vehicleId={vehicle.id}
                 initialActive={vehicle.active}
                 plateNumber={vehicle.plate_number}

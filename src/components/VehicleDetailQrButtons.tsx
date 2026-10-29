@@ -87,11 +87,13 @@ export default function VehicleDetailQrButtons({ vehicle }: VehicleDetailQrButto
         </div>
       </div>
 
-      <ArmadaQrModal
-        vehicle={vehicle}
-        isOpen={modalOpen}
-        onClose={() => setModalOpen(false)}
-      />
+      {modalOpen && (
+        <ArmadaQrModal
+          vehicle={vehicle}
+          isOpen
+          onClose={() => setModalOpen(false)}
+        />
+      )}
     </>
   );
 }

@@ -179,7 +179,7 @@ export default function ArmadaQuickQrModal({ vehicles }: ArmadaQuickQrModalProps
                     ? `Ditemukan ${filteredVehicles.length} armada`
                     : `Menampilkan ${filteredVehicles.length} dari total ${vehicles.length} armada`}
                 </span>
-                <span>Klik "Download PNG" untuk unduh langsung atau "Pratinjau"</span>
+                <span>Klik &quot;Download PNG&quot; untuk unduh langsung atau &quot;Pratinjau&quot;</span>
               </div>
             </div>
 
@@ -187,7 +187,7 @@ export default function ArmadaQuickQrModal({ vehicles }: ArmadaQuickQrModalProps
             <div style={{ flex: 1, overflowY: "auto", padding: "12px 24px" }}>
               {filteredVehicles.length === 0 ? (
                 <div style={{ padding: "40px 16px", textAlign: "center", color: "var(--muted)" }}>
-                  <p style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>Tidak ada armada yang cocok dengan kata kunci "{search}"</p>
+                  <p style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>Tidak ada armada yang cocok dengan kata kunci &quot;{search}&quot;</p>
                   <p style={{ margin: "4px 0 0", fontSize: 12 }}>Periksa kembali penulisan nomor plat atau nama LPS.</p>
                 </div>
               ) : (
@@ -309,14 +309,16 @@ export default function ArmadaQuickQrModal({ vehicles }: ArmadaQuickQrModalProps
       )}
 
       {/* Pratinjau Modal untuk kendaraan yang dipilih */}
-      <ArmadaQrModal
-        vehicle={selectedVehicle}
-        isOpen={previewModalOpen}
-        onClose={() => {
-          setPreviewModalOpen(false);
-          setSelectedVehicle(null);
-        }}
-      />
+      {previewModalOpen && selectedVehicle && (
+        <ArmadaQrModal
+          vehicle={selectedVehicle}
+          isOpen
+          onClose={() => {
+            setPreviewModalOpen(false);
+            setSelectedVehicle(null);
+          }}
+        />
+      )}
     </>
   );
 }

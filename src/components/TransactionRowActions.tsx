@@ -72,14 +72,16 @@ export default function TransactionRowActions({
 
       {canManage && (
         <>
-          <TransactionFormModal
-            isOpen={editModalOpen}
-            onClose={() => setEditModalOpen(false)}
-            mode="edit"
-            weighing={weighing}
-            lpsOptions={lpsOptions}
-            vehicleOptions={vehicleOptions}
-          />
+          {editModalOpen && (
+            <TransactionFormModal
+              isOpen
+              onClose={() => setEditModalOpen(false)}
+              mode="edit"
+              weighing={weighing}
+              lpsOptions={lpsOptions}
+              vehicleOptions={vehicleOptions}
+            />
+          )}
 
           <TransactionDeleteModal
             isOpen={deleteModalOpen}

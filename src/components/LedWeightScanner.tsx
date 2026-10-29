@@ -432,12 +432,18 @@ export default function LedWeightScanner({
   const [lockedReading, setLockedReading] = useState<Detection | null>(null);
   const lockedReadingRef = useRef<Detection | null>(null);
   const [stable, setStable] = useState(false);
+  const [sampleCount, setSampleCount] = useState(0);
   const [showVision, setShowVision] = useState(false);
 
   // Area potong crop (koordinat relatif 0..1 dari video)
   const [cropArea, setCropArea] = useState<CropArea>(DEFAULT_CROP);
   const [calibrating, setCalibrating] = useState(false);
   const selectionStartRef = useRef<{ x: number; y: number } | null>(null);
+
+  const clearSamples = useCallback(() => {
+    samplesRef.current = [];
+    setSampleCount(0);
+  }, []);
 
   // Status check untuk backend YOLO OCR (Direct Browser + Proxy Next.js)
   const checkYoloHealth = useCallback(async (overrideUrl?: string): Promise<{ ok: boolean; error?: string }> => {
@@ -537,10 +543,14 @@ export default function LedWeightScanner({
       return { ok: false, error: e?.message || "Gagal menghubungi server OCR" };
     }
   }, [customYoloUrl]);
+  const checkYoloHealthRef = useRef(checkYoloHealth);
+  useEffect(() => {
+    checkYoloHealthRef.current = checkYoloHealth;
+  }, [checkYoloHealth]);
 
   // Otomatis baca URL bridge dari query parameter ?yolo_url= atau localStorage
   useEffect(() => {
-    if (typeof window !== "undefined") {
+    const initializeBridge = window.setTimeout(() => {
       const isLocalHost = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
       const params = new URLSearchParams(window.location.search);
       const urlFromParam = params.get("yolo_url") || params.get("yoloUrl");
@@ -561,20 +571,26 @@ export default function LedWeightScanner({
 
       setCustomYoloUrl(activeUrl);
       setBridgeInputUrl(activeUrl);
-      setOcrEngine("yolo");
-      void checkYoloHealth(activeUrl);
-    }
-  }, [checkYoloHealth]);
+      void checkYoloHealthRef.current(activeUrl);
+    }, 0);
+
+    return () => window.clearTimeout(initializeBridge);
+  }, []);
 
   useEffect(() => {
     if (ocrEngine !== "yolo" && ocrEngine !== "sevenseg") return;
-    checkYoloHealth();
+    const initialCheck = window.setTimeout(() => {
+      void checkYoloHealthRef.current();
+    }, 0);
     const interval = setInterval(() => {
       if (active && yoloFailCountRef.current === 0) return;
-      checkYoloHealth();
+      void checkYoloHealthRef.current();
     }, 8000);
-    return () => clearInterval(interval);
-  }, [checkYoloHealth, ocrEngine, active]);
+    return () => {
+      window.clearTimeout(initialCheck);
+      clearInterval(interval);
+    };
+  }, [ocrEngine, active]);
 
   // Inisialisasi Tesseract.js Worker jika dipilih
   useEffect(() => {
@@ -632,7 +648,19 @@ export default function LedWeightScanner({
     customYoloUrl,
     yoloStatus,
   });
-  stateRef.current = {
+  useEffect(() => {
+    stateRef.current = {
+      ocrEngine,
+      configuredDigits,
+      colorMode,
+      sensitivity,
+      cropArea,
+      showVision,
+      onReading,
+      customYoloUrl,
+      yoloStatus,
+    };
+  }, [
     ocrEngine,
     configuredDigits,
     colorMode,
@@ -642,7 +670,7 @@ export default function LedWeightScanner({
     onReading,
     customYoloUrl,
     yoloStatus,
-  };
+  ]);
 
   const pointFromPointer = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     const video = videoRef.current;
@@ -685,6 +713,10 @@ export default function LedWeightScanner({
     if (videoRef.current) videoRef.current.srcObject = null;
     setActive(false);
   }, []);
+  const stopRef = useRef(stop);
+  useEffect(() => {
+    stopRef.current = stop;
+  }, [stop]);
 
   const lockCurrentReading = useCallback(
     (targetDetection?: Detection | null) => {
@@ -711,10 +743,10 @@ export default function LedWeightScanner({
   const unlockReading = useCallback(() => {
     setLockedReading(null);
     lockedReadingRef.current = null;
-    samplesRef.current = [];
+    clearSamples();
     setStable(false);
     setMessage("Kunci angka dilepas. Membaca display kembali secara real-time...");
-  }, []);
+  }, [clearSamples]);
 
   const handleDetectionResult = useCallback(
     (detection: Detection | null) => {
@@ -724,6 +756,7 @@ export default function LedWeightScanner({
         if (samplesRef.current.length > 0) {
           samplesRef.current = samplesRef.current.slice(-2);
         }
+        setSampleCount(samplesRef.current.length);
         setReading(null);
         setStable(false);
         notifyReading(null);
@@ -733,6 +766,7 @@ export default function LedWeightScanner({
 
       const samples = [...samplesRef.current.slice(-2), detection.weightKg];
       samplesRef.current = samples;
+      setSampleCount(samples.length);
 
       const isStable =
         samples.length >= 3 && Math.max(...samples) - Math.min(...samples) <= 1;
@@ -1036,14 +1070,16 @@ export default function LedWeightScanner({
   }, [handleDetectionResult]);
 
   const analyzeRef = useRef(analyze);
-  analyzeRef.current = analyze;
+  useEffect(() => {
+    analyzeRef.current = analyze;
+  }, [analyze]);
 
-  async function start(targetCamId?: string) {
+  const start = useCallback(async (targetCamId?: string) => {
     stop();
     setMessage("Meminta izin kamera LED...");
     setReading(null);
     setStable(false);
-    samplesRef.current = [];
+    clearSamples();
     yoloFailCountRef.current = 0;
     try {
       const activeCamId = targetCamId !== undefined ? targetCamId : cameraId;
@@ -1068,7 +1104,11 @@ export default function LedWeightScanner({
       stop();
       setMessage(formatCameraErrorMessage(error, "Kamera LED"));
     }
-  }
+  }, [cameraId, clearSamples, refreshCameras, stop]);
+  const startRef = useRef(start);
+  useEffect(() => {
+    startRef.current = start;
+  }, [start]);
 
   // Otomatis aktifkan kamera dan langsung jalankan OCR services saat aplikasi dibuka
   useEffect(() => {
@@ -1089,7 +1129,7 @@ export default function LedWeightScanner({
         } catch {}
 
         if (mounted) {
-          await start(firstCam || undefined);
+          await startRef.current(firstCam || undefined);
         }
       } catch (err) {
         console.warn("Auto-start camera warning:", err);
@@ -1100,7 +1140,7 @@ export default function LedWeightScanner({
 
     return () => {
       mounted = false;
-      stop();
+      stopRef.current();
     };
   }, []);
 
@@ -1151,7 +1191,7 @@ export default function LedWeightScanner({
       setMessage("Area display tersimpan. Sensor sekarang fokus pada display timbangan.");
     }
     setCalibrating(false);
-    samplesRef.current = [];
+    clearSamples();
   }
 
   const displayReading = lockedReading || reading;
@@ -1255,7 +1295,7 @@ export default function LedWeightScanner({
               : stable
               ? `OCR LED STABIL · KG (${displayReading?.engine.toUpperCase()})`
               : reading
-              ? `MEMBACA: ${reading.digits} (${samplesRef.current.length}/3 STABIL)`
+              ? `MEMBACA: ${reading.digits} (${sampleCount}/3 STABIL)`
               : "MENUNGGU DISPLAY TIMBANGAN"}
           </span>
 
@@ -1327,7 +1367,7 @@ export default function LedWeightScanner({
               value={ocrEngine}
               onChange={(event) => {
                 setOcrEngine(event.target.value as OcrEngine);
-                samplesRef.current = [];
+                clearSamples();
               }}
             >
               <option value="yolo">YOLO Vision AI (Rekomendasi - Deteksi Objek)</option>
@@ -1652,7 +1692,7 @@ export default function LedWeightScanner({
               value={colorMode}
               onChange={(event) => {
                 setColorMode(event.target.value as ColorMode);
-                samplesRef.current = [];
+                clearSamples();
               }}
             >
               <option value="red">LED Merah (Standar timbangan)</option>
@@ -1668,7 +1708,7 @@ export default function LedWeightScanner({
               value={sensitivity}
               onChange={(event) => {
                 setSensitivity(event.target.value as SensitivityMode);
-                samplesRef.current = [];
+                clearSamples();
               }}
             >
               <option value="auto">Otomatis (Adaptif)</option>
@@ -1684,7 +1724,7 @@ export default function LedWeightScanner({
               value={configuredDigits}
               onChange={(event) => {
                 setConfiguredDigits(Number(event.target.value));
-                samplesRef.current = [];
+                clearSamples();
               }}
             >
               <option value={0}>Otomatis (1 s/d 8 digit)</option>
@@ -1724,7 +1764,7 @@ export default function LedWeightScanner({
             type="button"
             onClick={() => {
               setCropArea(DEFAULT_CROP);
-              samplesRef.current = [];
+              clearSamples();
               setMessage("Area LED dikembalikan ke posisi fokus tengah.");
             }}
             disabled={!active}

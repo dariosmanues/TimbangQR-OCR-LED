@@ -114,22 +114,26 @@ export default function ArmadaRowActions({
       </div>
 
       {/* Modal Dialog QR Card */}
-      <ArmadaQrModal
-        vehicle={vehicle}
-        isOpen={qrModalOpen}
-        onClose={() => setQrModalOpen(false)}
-      />
+      {qrModalOpen && (
+        <ArmadaQrModal
+          vehicle={vehicle}
+          isOpen
+          onClose={() => setQrModalOpen(false)}
+        />
+      )}
 
       {/* Modal Dialog Edit & Hapus Armada (Hanya Super Admin) */}
       {canManage && (
         <>
-          <ArmadaFormModal
-            isOpen={editModalOpen}
-            onClose={() => setEditModalOpen(false)}
-            mode="edit"
-            vehicle={vehicle}
-            lpsOptions={lpsOptions}
-          />
+          {editModalOpen && (
+            <ArmadaFormModal
+              isOpen
+              onClose={() => setEditModalOpen(false)}
+              mode="edit"
+              vehicle={vehicle}
+              lpsOptions={lpsOptions}
+            />
+          )}
 
           <ArmadaDeleteModal
             isOpen={deleteModalOpen}

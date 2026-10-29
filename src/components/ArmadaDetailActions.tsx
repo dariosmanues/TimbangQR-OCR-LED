@@ -46,13 +46,15 @@ export default function ArmadaDetailActions({ vehicle, lpsOptions }: ArmadaDetai
         <Trash2 size={16} /> Hapus
       </button>
 
-      <ArmadaFormModal
-        isOpen={editOpen}
-        onClose={() => setEditOpen(false)}
-        mode="edit"
-        vehicle={vehicle}
-        lpsOptions={lpsOptions}
-      />
+      {editOpen && (
+        <ArmadaFormModal
+          isOpen
+          onClose={() => setEditOpen(false)}
+          mode="edit"
+          vehicle={vehicle}
+          lpsOptions={lpsOptions}
+        />
+      )}
 
       <ArmadaDeleteModal
         isOpen={deleteOpen}

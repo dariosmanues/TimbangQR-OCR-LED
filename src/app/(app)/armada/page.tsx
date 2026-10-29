@@ -186,6 +186,7 @@ export default async function ArmadaPage({
                   <td style={{ textAlign: "center" }}>
                     {canCrud ? (
                       <VehicleStatusToggle
+                        key={`${vehicle.id}-${vehicle.active}`}
                         vehicleId={vehicle.id}
                         initialActive={vehicle.active}
                         plateNumber={vehicle.plate_number}

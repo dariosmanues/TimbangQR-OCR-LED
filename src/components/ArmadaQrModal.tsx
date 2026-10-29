@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Image from "next/image";
 import { X, Download, QrCode, Printer, Check, Copy, ExternalLink, ShieldCheck, Truck, MapPin, User } from "lucide-react";
 import Link from "next/link";
 import {
@@ -20,22 +21,16 @@ interface ArmadaQrModalProps {
 
 export default function ArmadaQrModal({ vehicle, isOpen, onClose }: ArmadaQrModalProps) {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [loadingPreview, setLoadingPreview] = useState(false);
+  const [loadingPreview, setLoadingPreview] = useState(true);
   const [downloadingCard, setDownloadingCard] = useState(false);
   const [downloadingRaw, setDownloadingRaw] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!isOpen || !vehicle) {
-      setPreviewUrl(null);
-      setError(null);
-      return;
-    }
+    if (!vehicle) return;
 
     let isMounted = true;
-    setLoadingPreview(true);
-    setError(null);
 
     generateArmadaQrCardCanvas(vehicle)
       .then((canvas) => {
@@ -54,7 +49,7 @@ export default function ArmadaQrModal({ vehicle, isOpen, onClose }: ArmadaQrModa
     return () => {
       isMounted = false;
     };
-  }, [isOpen, vehicle]);
+  }, [vehicle]);
 
   if (!isOpen || !vehicle) return null;
 
@@ -279,9 +274,12 @@ export default function ArmadaQrModal({ vehicle, isOpen, onClose }: ArmadaQrModa
               </div>
             ) : previewUrl ? (
               <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
-                <img
+                <Image
                   src={previewUrl}
                   alt={`Kartu QR ${formattedPlate}`}
+                  width={960}
+                  height={1320}
+                  unoptimized
                   style={{
                     maxWidth: "100%",
                     maxHeight: "360px",

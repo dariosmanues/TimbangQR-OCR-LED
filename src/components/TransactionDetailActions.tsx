@@ -53,14 +53,16 @@ export default function TransactionDetailActions({
         </button>
       </div>
 
-      <TransactionFormModal
-        isOpen={editOpen}
-        onClose={() => setEditOpen(false)}
-        mode="edit"
-        weighing={weighing}
-        lpsOptions={lpsOptions}
-        vehicleOptions={vehicleOptions}
-      />
+      {editOpen && (
+        <TransactionFormModal
+          isOpen
+          onClose={() => setEditOpen(false)}
+          mode="edit"
+          weighing={weighing}
+          lpsOptions={lpsOptions}
+          vehicleOptions={vehicleOptions}
+        />
+      )}
 
       <TransactionDeleteModal
         isOpen={deleteOpen}

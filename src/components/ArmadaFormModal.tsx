@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { X, Truck, Save, ShieldCheck, AlertCircle, CheckCircle2 } from "lucide-react";
 import type { VehicleRow } from "@/lib/types";
 import type { VehicleCardData } from "@/lib/qr-card-canvas";
@@ -27,73 +27,37 @@ export default function ArmadaFormModal({
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   // Form State
-  const [plateNumber, setPlateNumber] = useState("");
-  const [vehicleType, setVehicleType] = useState("PICKUP");
-  const [tareKg, setTareKg] = useState<string>("");
-  const [wasteType, setWasteType] = useState("SAMPAH RUMAH TANGGA");
-  const [active, setActive] = useState(true);
+  // The modal is mounted only while open. Initialising from its inputs keeps a
+  // freshly opened form in sync without cascading state updates in an effect.
+  const editVehicle = mode === "edit" ? vehicle : null;
+  const matchedLps = editVehicle
+    ? lpsOptions.find(
+        (lps) => lps.name.toLowerCase().trim() === (editVehicle.nama_lps || "").toLowerCase().trim()
+      )
+    : null;
+  const [plateNumber, setPlateNumber] = useState(() => editVehicle?.plate_number || "");
+  const [vehicleType, setVehicleType] = useState(() => editVehicle?.vehicle_type || "PICKUP");
+  const [tareKg, setTareKg] = useState<string>(() =>
+    editVehicle?.default_tare_kg != null ? String(editVehicle.default_tare_kg) : ""
+  );
+  const [wasteType, setWasteType] = useState(() => editVehicle?.waste_type || "SAMPAH RUMAH TANGGA");
+  const [active, setActive] = useState(() => editVehicle?.active ?? true);
 
-  const [lpsId, setLpsId] = useState<string>("");
-  const [namaLps, setNamaLps] = useState("");
+  const [lpsId, setLpsId] = useState<string>(() => (matchedLps ? String(matchedLps.id) : ""));
+  const [namaLps, setNamaLps] = useState(() => editVehicle?.nama_lps || editVehicle?.lps_names || "");
   const [driverName, setDriverName] = useState("");
-  const [namaKetuaLps, setNamaKetuaLps] = useState("");
+  const [namaKetuaLps, setNamaKetuaLps] = useState(() => editVehicle?.nama_ketua_lps || "");
 
-  const [nomorIzin, setNomorIzin] = useState("");
-  const [noUrut, setNoUrut] = useState<string>("");
-  const [kelurahanLps, setKelurahanLps] = useState("");
-  const [kecamatanLps, setKecamatanLps] = useState("");
-  const [wilayahKerja, setWilayahKerja] = useState("");
-  const [lokasiTps, setLokasiTps] = useState("HARAPAN JAYA");
-
-  useEffect(() => {
-    if (!isOpen) {
-      setError(null);
-      setSuccessMsg(null);
-      return;
-    }
-
-    if (mode === "edit" && vehicle) {
-      setPlateNumber(vehicle.plate_number || "");
-      setVehicleType(vehicle.vehicle_type || "PICKUP");
-      setTareKg(vehicle.default_tare_kg != null ? String(vehicle.default_tare_kg) : "");
-      setWasteType(vehicle.waste_type || "SAMPAH RUMAH TANGGA");
-      setActive(vehicle.active ?? true);
-
-      setNamaLps(vehicle.nama_lps || vehicle.lps_names || "");
-      setDriverName("");
-      setNamaKetuaLps(vehicle.nama_ketua_lps || "");
-
-      setNomorIzin(vehicle.nomor_izin || "");
-      setNoUrut(vehicle.no_urut != null ? String(vehicle.no_urut) : "");
-      setKelurahanLps(vehicle.kelurahan_lps || "");
-      setKecamatanLps(vehicle.kecamatan_lps || vehicle.kecamatan || "");
-      setWilayahKerja(vehicle.wilayah_kerja || "");
-      setLokasiTps(vehicle.lokasi_tps || "HARAPAN JAYA");
-
-      // Match LPS ID if possible
-      const matched = lpsOptions.find(
-        (l) => l.name.toLowerCase().trim() === (vehicle.nama_lps || "").toLowerCase().trim()
-      );
-      setLpsId(matched ? String(matched.id) : "");
-    } else {
-      // Create mode reset
-      setPlateNumber("");
-      setVehicleType("PICKUP");
-      setTareKg("");
-      setWasteType("SAMPAH RUMAH TANGGA");
-      setActive(true);
-      setLpsId("");
-      setNamaLps("");
-      setDriverName("");
-      setNamaKetuaLps("");
-      setNomorIzin("");
-      setNoUrut("");
-      setKelurahanLps("");
-      setKecamatanLps("");
-      setWilayahKerja("");
-      setLokasiTps("HARAPAN JAYA");
-    }
-  }, [isOpen, mode, vehicle, lpsOptions]);
+  const [nomorIzin, setNomorIzin] = useState(() => editVehicle?.nomor_izin || "");
+  const [noUrut, setNoUrut] = useState<string>(() =>
+    editVehicle?.no_urut != null ? String(editVehicle.no_urut) : ""
+  );
+  const [kelurahanLps, setKelurahanLps] = useState(() => editVehicle?.kelurahan_lps || "");
+  const [kecamatanLps, setKecamatanLps] = useState(() =>
+    editVehicle?.kecamatan_lps || editVehicle?.kecamatan || ""
+  );
+  const [wilayahKerja, setWilayahKerja] = useState(() => editVehicle?.wilayah_kerja || "");
+  const [lokasiTps, setLokasiTps] = useState(() => editVehicle?.lokasi_tps || "HARAPAN JAYA");
 
   if (!isOpen) return null;
 
