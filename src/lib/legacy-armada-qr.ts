@@ -112,7 +112,11 @@ export async function resolveLegacyArmadaQr(
     const byPermit = permit ? vehicles.filter(v => v.nomor_izin === permit) : [];
     let vehicle = byPermit[0] || null;
 
-    if (!vehicle) {
+    // Satu plat dapat muncul pada lebih dari satu izin/LPS. Jika QR Master
+    // sudah memilih izin tertentu, kendaraan milik izin lain tidak boleh
+    // dipakai sebagai fallback karena akan mencampur riwayat penimbangan.
+    // Buat master terpisah bila izin tersebut belum ada secara lokal.
+    if (!vehicle && !permit) {
       const candidates = vehicles.filter(v => !v.nomor_izin);
       if (candidates.length >= 1) {
         vehicle = candidates[0];
