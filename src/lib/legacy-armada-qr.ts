@@ -139,7 +139,9 @@ export async function resolveLegacyArmadaQr(
         [
           stableCode("ARMADA-", identifier), plate, normalizedPlate,
           row.jenis_armada || "PICKUP", "SAMPAH RUMAH TANGGA",
-          "ARMADA-" + normalizedPlate, lpsName,
+          // QR cetak tetap ARMADA-{plat}; token internal harus unik per izin
+          // karena satu plat dapat memiliki lebih dari satu izin aktif.
+          stableCode("ARMADA-QR-", identifier), lpsName,
           row.lokasi_tps || "HARAPAN JAYA", permit,
         ]
       );
