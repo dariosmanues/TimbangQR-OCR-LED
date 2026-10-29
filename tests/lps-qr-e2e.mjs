@@ -166,7 +166,11 @@ try {
   );
   assert.equal(operationalCount.rows[0].vehicle_count, 1);
   assert.equal(operationalCount.rows[0].assignment_count, 1);
-  assert.ok(totalLpsLookups > 0, "ARMADA QR must check LPS regeneration status online");
+  assert.equal(
+    totalLpsLookups,
+    0,
+    "QR Master ARMADA bersifat permanen dan tidak boleh bergantung pada status regenerasi QR LPS."
+  );
 
   // A complete workflow also creates a weighing ticket for this actual QR format
   // ONLY inside the disposable PostgreSQL database named timbangqr_ci.
