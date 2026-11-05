@@ -160,10 +160,23 @@ export default function WeighingWorkspace({
 
   useEffect(() => {
     const initial = window.setTimeout(() => void refreshBridge(false), 0);
-    const interval = window.setInterval(() => void refreshBridge(true), 1500);
+    // Polling setiap 3 detik (hemat CPU Vercel hingga 50%), otomatis jeda jika tab browser diminimize/di latar belakang
+    const interval = window.setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      void refreshBridge(true);
+    }, 3000);
+
+    const onVisibilityChange = () => {
+      if (!document.hidden) {
+        void refreshBridge(false);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
     return () => {
       window.clearTimeout(initial);
       window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [refreshBridge]);
 

@@ -66,7 +66,10 @@ export default function RemoteSerialStatusPanel() {
       setNow(Date.now());
       void refresh();
     }, 0);
-    const timer = window.setInterval(() => void refresh(true), 2000);
+    const timer = window.setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      void refresh(true);
+    }, 5000);
     const clock = window.setInterval(() => setNow(Date.now()), 5000);
     return () => {
       window.clearTimeout(initial);

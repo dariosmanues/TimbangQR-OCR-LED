@@ -124,7 +124,10 @@ export default function SerialConnectionPanel() {
       void refreshStatus();
       void refreshPorts();
     }, 0);
-    const timer = window.setInterval(() => void refreshStatus(true), 2000);
+    const timer = window.setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      void refreshStatus(true);
+    }, 5000);
     return () => {
       clearTimeout(initTimer);
       window.clearInterval(timer);

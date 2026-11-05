@@ -292,9 +292,10 @@ export default function QrScanner({
 
       scanIntervalRef.current = setInterval(async () => {
         if (isDecodingRef.current || !videoRef.current) return;
+        if (typeof document !== "undefined" && document.hidden) return;
         frameCount++;
 
-        // 1. Native BarcodeDetector check (Fast ~50ms)
+        // 1. Native BarcodeDetector check (Fast ~50ms, 100% lokal di browser)
         if (nativeDetector && videoRef.current.readyState >= 2) {
           try {
             const barcodes = await nativeDetector.detect(videoRef.current);
@@ -305,7 +306,7 @@ export default function QrScanner({
           } catch {}
         }
 
-        // 2. Server-Assisted OpenCV check every 350ms (frameCount % 4)
+        // 2. Decoder Lokal Canvas (100% lokal di browser pengguna, 0ms CPU Vercel)
         if (frameCount % 4 === 0 && !serverCheckBusy && videoRef.current.readyState >= 2) {
           serverCheckBusy = true;
           try {
@@ -335,21 +336,26 @@ export default function QrScanner({
                   handleDetected(localCode, "QR Lokal");
                   return;
                 }
-                const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
-                const customYolo = typeof window !== "undefined" ? localStorage.getItem("timbangqr_yolo_url") : null;
-                const qrHeaders: Record<string, string> = { "Content-Type": "application/json" };
-                if (customYolo) qrHeaders["x-yolo-url"] = customYolo;
 
-                const res = await fetch("/api/qr-decode", {
-                  method: "POST",
-                  headers: qrHeaders,
-                  body: JSON.stringify({ image: dataUrl }),
-                });
-                if (res.ok) {
-                  const data = await res.json();
-                  if (data.success && data.text && !isDecodingRef.current) {
-                    handleDetected(data.text, "OpenCV Vision");
-                    return;
+                // HANYA panggil server jika operator secara eksplisit mengonfigurasi URL Cloud Bridge sendiri
+                const customYolo = typeof window !== "undefined" ? localStorage.getItem("timbangqr_yolo_url") : null;
+                if (customYolo && !customYolo.includes("127.0.0.1") && !customYolo.includes("localhost")) {
+                  const dataUrl = canvas.toDataURL("image/jpeg", 0.7);
+                  const qrHeaders: Record<string, string> = {
+                    "Content-Type": "application/json",
+                    "x-yolo-url": customYolo,
+                  };
+                  const res = await fetch("/api/qr-decode", {
+                    method: "POST",
+                    headers: qrHeaders,
+                    body: JSON.stringify({ image: dataUrl }),
+                  });
+                  if (res.ok) {
+                    const data = await res.json();
+                    if (data.success && data.text && !isDecodingRef.current) {
+                      handleDetected(data.text, "OpenCV Vision");
+                      return;
+                    }
                   }
                 }
               }

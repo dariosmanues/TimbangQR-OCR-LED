@@ -583,9 +583,10 @@ export default function LedWeightScanner({
       void checkYoloHealthRef.current();
     }, 0);
     const interval = setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
       if (active && yoloFailCountRef.current === 0) return;
       void checkYoloHealthRef.current();
-    }, 8000);
+    }, 15000);
     return () => {
       window.clearTimeout(initialCheck);
       clearInterval(interval);
@@ -833,9 +834,14 @@ export default function LedWeightScanner({
 
     // MODE 1 & 2: Deep Learning Vision AI (YOLO & Renjith Seven-Segment CRNN)
     if (currentEngine === "yolo" || currentEngine === "sevenseg") {
+      // 1. Jangan kirim frame jika tab browser sedang di latar belakang
+      if (typeof document !== "undefined" && document.hidden) return;
+      // 2. Jangan kirim frame jika server OCR berstatus offline (mencegah ribuan request gagal yang membakar CPU Vercel)
+      if (currentYoloStatus === "offline") return;
+
       const now = Date.now();
-      // Jeda minimum: 450ms untuk Cloudflare Tunnel agar tunnel tidak overload, 200ms untuk lokal
-      const minInterval = isCloudflare ? 450 : 200;
+      // Jeda minimum: 500ms untuk Cloudflare Tunnel agar tunnel tidak overload, 250ms untuk lokal
+      const minInterval = isCloudflare ? 500 : 250;
       if (now - lastYoloFrameTimeRef.current < minInterval) return;
       if (yoloBusyRef.current) return;
       yoloBusyRef.current = true;
@@ -1098,8 +1104,9 @@ export default function LedWeightScanner({
       setMessage("Kamera aktif. Arahkan kotak ke display angka timbangan.");
       if (timerRef.current) window.clearInterval(timerRef.current);
       timerRef.current = window.setInterval(() => {
+        if (typeof document !== "undefined" && document.hidden) return;
         analyzeRef.current();
-      }, 120);
+      }, 200);
     } catch (error) {
       stop();
       setMessage(formatCameraErrorMessage(error, "Kamera LED"));
