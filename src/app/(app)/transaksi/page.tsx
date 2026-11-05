@@ -1,6 +1,6 @@
 import Link from "next/link";
-import { Filter, Search, Camera, ShieldCheck, Crown } from "lucide-react";
-import { getSession, isSuperAdmin } from "@/lib/auth";
+import { Filter, Search, Camera, Crown, Calendar, User } from "lucide-react";
+import { getSession, canManageTransactions } from "@/lib/auth";
 import { getLpsList, listWeighings } from "@/lib/queries";
 import { dbQuery } from "@/lib/db";
 import { formatDateTime, formatNumber } from "@/lib/utils";
@@ -17,7 +17,7 @@ export default async function TransactionsPage({
   searchParams: Promise<{ q?: string; month?: string; lps?: string }>;
 }) {
   const user = await getSession();
-  const canManage = isSuperAdmin(user);
+  const canManage = canManageTransactions(user);
 
   const params = await searchParams;
   const q = params.q || "";
@@ -41,7 +41,7 @@ export default async function TransactionsPage({
     <>
       <div className="page-head">
         <div>
-          <div style={{ display: "inline-flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
             {canManage ? (
               <span
                 style={{
@@ -57,7 +57,7 @@ export default async function TransactionsPage({
                   border: "1px solid #fde68a",
                 }}
               >
-                <Crown size={13} /> Hak Akses: Super Admin (CRUD Transaksi Aktif)
+                <Crown size={13} /> Hak Akses: Master ADMIN (CRUD Transaksi Aktif)
               </span>
             ) : (
               <span
@@ -69,19 +69,19 @@ export default async function TransactionsPage({
                   borderRadius: "12px",
                   fontSize: 11,
                   fontWeight: 600,
-                  backgroundColor: "#eff6ff",
-                  color: "#1e40af",
-                  border: "1px solid #bfdbfe",
+                  backgroundColor: "#f8fafc",
+                  color: "#64748b",
+                  border: "1px solid #cbd5e1",
                 }}
               >
-                <ShieldCheck size={13} /> Hak Akses: Administrator (Hanya Baca / Read-Only)
+                🔒 Hak Akses: Administrator (Lihat Data Saja — CRUD Khusus Master ADMIN)
               </span>
             )}
           </div>
           <h1>Transaksi penimbangan</h1>
           <p>
             Menampilkan maksimal 300 data sesuai filter.
-            {canManage ? " Anda memiliki akses untuk Tambah, Edit, dan Hapus data transaksi." : " Mode hanya lihat transaksi (Read-Only)."}
+            {canManage && " Anda memiliki akses untuk Tambah, Edit, dan Hapus data transaksi."}
           </p>
         </div>
 
@@ -122,7 +122,8 @@ export default async function TransactionsPage({
         </div>
       </form>
 
-      <article className="card">
+      {/* DESKTOP MODE: FULL TABLE VIEW */}
+      <article className="card desktop-only-view">
         <div className="table-wrap">
           <table>
             <thead>
@@ -175,6 +176,68 @@ export default async function TransactionsPage({
           </table>
         </div>
       </article>
+
+      {/* MOBILE MODE: RECEIPT CARD LIST VIEW */}
+      <div className="mobile-only-view mobile-card-list">
+        {rows.map((row) => (
+          <article key={row.id} className="card mobile-data-card">
+            <div className="mobile-card-top">
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <span className="plate mobile-plate-badge">{row.plate_number}</span>
+                <span className="badge green" style={{ fontSize: 11 }}>
+                  #{row.ticket_number}
+                </span>
+              </div>
+              <span style={{ fontSize: 11, color: "var(--muted)", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                <Calendar size={12} /> {formatDateTime(row.weighed_at)}
+              </span>
+            </div>
+
+            <div className="mobile-card-body">
+              <div className="mobile-card-lps">
+                <strong>{row.lps_name}</strong>
+                <span className="muted" style={{ fontSize: 12, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                  <User size={12} /> {row.driver_name || "-"}
+                </span>
+              </div>
+
+              <div className="mobile-weight-pills">
+                <div className="weight-pill">
+                  <span>Gross</span>
+                  <strong>{formatNumber(row.gross_kg)} kg</strong>
+                </div>
+                <div className="weight-pill">
+                  <span>Tare</span>
+                  <strong>{formatNumber(row.tare_kg)} kg</strong>
+                </div>
+                <div className="weight-pill highlight">
+                  <span>Netto 2</span>
+                  <strong>{formatNumber(row.netto_2_kg)} kg</strong>
+                </div>
+              </div>
+            </div>
+
+            <div className="mobile-card-footer">
+              <span style={{ fontSize: 11, color: "var(--muted)" }}>
+                Rafaksi: {formatNumber(row.rafaksi_kg)} kg
+              </span>
+              <TransactionRowActions
+                weighing={row}
+                canManage={canManage}
+                lpsOptions={lpsList}
+                vehicleOptions={vehicles}
+              />
+            </div>
+          </article>
+        ))}
+
+        {rows.length === 0 && (
+          <article className="card empty">
+            <Search size={28} />
+            <p>Data tidak ditemukan.</p>
+          </article>
+        )}
+      </div>
     </>
   );
 }

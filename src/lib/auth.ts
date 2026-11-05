@@ -66,34 +66,40 @@ export function isAdmin(user: SessionUser | null | undefined): boolean {
   return role === "ADMIN" || role === "ADMINISTRATOR";
 }
 
+export function isTransactionAdmin(user: SessionUser | null | undefined): boolean {
+  if (!user) return false;
+  const role = (user.role || "").toUpperCase();
+  return role === "ADMIN_TRANSAKSI";
+}
+
 export function canManageTransactions(user: SessionUser | null | undefined): boolean {
-  // Hanya Super Admin yang memiliki hak akses CRUD
   return isSuperAdmin(user);
 }
 
-export function canManageArmada(user: SessionUser | null | undefined): boolean {
-  // Hanya Super Admin yang memiliki hak akses CRUD
+export function canManageMasterArmada(user: SessionUser | null | undefined): boolean {
+  return isSuperAdmin(user);
+}
+
+export function canManualInputPlate(user: SessionUser | null | undefined): boolean {
   return isSuperAdmin(user);
 }
 
 export function canManageSystem(user: SessionUser | null | undefined): boolean {
-  // Hanya Super Admin yang memiliki hak akses CRUD
   return isSuperAdmin(user);
 }
 
-export function canCrud(user: SessionUser | null | undefined): boolean {
-  // Hanya Super Admin yang memiliki hak akses CRUD
-  return isSuperAdmin(user);
+export async function requireTransactionAdmin(): Promise<SessionUser> {
+  const user = await requireUser();
+  if (!canManageTransactions(user)) {
+    throw new Error("Akses ditolak: Hanya Master ADMIN yang memiliki izin kelola (CRUD) transaksi.");
+  }
+  return user;
 }
 
 export async function requireSuperAdmin(): Promise<SessionUser> {
   const user = await requireUser();
   if (!isSuperAdmin(user)) {
-    throw new Error("Akses ditolak: Hanya Super Administrator yang memiliki izin untuk tindakan ini.");
+    throw new Error("Akses ditolak: Hanya Master ADMIN yang memiliki akses ke fitur ini.");
   }
   return user;
-}
-
-export async function requireTransactionAdmin(): Promise<SessionUser> {
-  return requireSuperAdmin();
 }

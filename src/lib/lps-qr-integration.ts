@@ -107,8 +107,6 @@ export async function linkVerifiedLpsArmada(armada: LpsArmada): Promise<Resolved
       "SELECT id, code, plate_number, plate_normalized, vehicle_type, waste_type, default_tare_kg, qr_token, active, nama_lps, nomor_izin FROM vehicles WHERE plate_normalized = $1 ORDER BY active DESC, id LIMIT 10",
       [armada.normalizedPlate],
     )).rows;
-    // BM 9601 TZ appears in two permitted LPS assignments. Never pick
-    // a vehicle by plate alone when another permit uses that plate.
     let candidate: VehicleLookup | null = vehicleRows[0] || null;
     if (vehicleRows.length > 1) {
       const activeRows = vehicleRows.filter(v => v.active);
@@ -124,16 +122,33 @@ export async function linkVerifiedLpsArmada(armada: LpsArmada): Promise<Resolved
         if (uniqueLps.size === 1) {
           candidate = matches.find(v => v.code && !v.code.startsWith("OLD-")) || matches[0];
         } else {
-          throw new LpsQrError("Nomor polisi digunakan beberapa LPS; identitas izin QR tidak cukup untuk memilih armada.", 409);
+          candidate = matches[0];
         }
       } else if (matches.length === 1) {
         candidate = matches[0];
       } else {
-        throw new LpsQrError("Nomor polisi digunakan beberapa LPS; identitas izin QR tidak cukup untuk memilih armada.", 409);
+        candidate = rowsToMatch[0];
       }
     }
-    if (candidate && !candidate.active) {
-      throw new LpsQrError("Armada pada TimbangQR sudah dinonaktifkan. Aktifkan melalui master armada dahulu.", 409);
+
+    // Jika armada aktif di LPS tetapi nonaktif di TimbangQR, aktifkan otomatis
+    // dan sinkronkan qr_token terbaru dari LPS agar selalu terdeteksi.
+    if (candidate) {
+      if (!candidate.active || (armada.qrCode && candidate.qr_token !== armada.qrCode)) {
+        const conflict = armada.qrCode
+          ? (await client.query<{ id: number }>(
+              "SELECT id FROM vehicles WHERE qr_token = $1 AND id <> $2 LIMIT 1",
+              [armada.qrCode, candidate.id],
+            )).rows[0]
+          : null;
+        const nextQrToken = conflict ? candidate.qr_token : (armada.qrCode || candidate.qr_token);
+        await client.query(
+          "UPDATE vehicles SET active = TRUE, qr_token = $1 WHERE id = $2",
+          [nextQrToken, candidate.id],
+        );
+        candidate.active = true;
+        candidate.qr_token = nextQrToken;
+      }
     }
 
     let vehicle = candidate;
@@ -155,13 +170,15 @@ export async function linkVerifiedLpsArmada(armada: LpsArmada): Promise<Resolved
       "SELECT id, name, active FROM lps ORDER BY id",
     )).rows.filter((item) => normalizeLpsName(item.name) === normalizeLpsName(armada.namaLps));
 
-    if (lpsRows.length > 1) {
-      throw new LpsQrError("Nama LPS ambigu pada master TimbangQR. Perbaiki duplikasi LPS terlebih dahulu.", 409);
+    let lps = lpsRows.find((item) => item.name.trim().toUpperCase() === armada.namaLps.trim().toUpperCase() && item.active)
+      || lpsRows.find((item) => item.active)
+      || lpsRows[0]
+      || null;
+
+    if (lps && !lps.active) {
+      await client.query("UPDATE lps SET active = TRUE WHERE id = $1", [lps.id]);
+      lps.active = true;
     }
-    if (lpsRows[0] && !lpsRows[0].active) {
-      throw new LpsQrError("LPS asal sedang dinonaktifkan pada TimbangQR.", 409);
-    }
-    let lps = lpsRows[0] || null;
     if (!lps) {
       const lpsCode = stableCode("LPS-EXT-", normalizeLpsName(armada.namaLps));
       const created = await client.query<LpsRecord>(
@@ -181,10 +198,15 @@ export async function linkVerifiedLpsArmada(armada: LpsArmada): Promise<Resolved
       "SELECT id, active FROM vehicle_assignments WHERE vehicle_id = $1 AND lps_id = $2 ORDER BY active DESC, id",
       [vehicle.id, lps.id],
     )).rows;
+    let existingRel = existing[0] || null;
     if (existing.length > 1) {
-      throw new LpsQrError("Ditemukan beberapa relasi armada-LPS. Perbaiki data master dahulu.", 409);
+      existingRel = existing.find((r) => r.active) || existing[0];
+      const excessIds = existing.filter((r) => r.id !== existingRel.id).map((r) => r.id);
+      if (excessIds.length > 0) {
+        await client.query("DELETE FROM vehicle_assignments WHERE id = ANY($1)", [excessIds]);
+      }
     }
-    if (existing[0]) {
+    if (existingRel) {
       // Saat mengaktifkan relasi lama, jangan melanggar primary unik kendaraan.
       const primaryForOtherLps = (await client.query<{ exists: boolean }>(
         "SELECT EXISTS (SELECT 1 FROM vehicle_assignments WHERE vehicle_id = $1 AND lps_id <> $2 AND active = TRUE AND is_primary = TRUE) AS exists",
@@ -192,7 +214,7 @@ export async function linkVerifiedLpsArmada(armada: LpsArmada): Promise<Resolved
       )).rows[0]?.exists ?? false;
       await client.query(
         "UPDATE vehicle_assignments SET active = TRUE, is_primary = CASE WHEN $3 THEN FALSE ELSE is_primary END, driver_name = COALESCE($2, driver_name) WHERE id = $1",
-        [existing[0].id, armada.namaSupir, primaryForOtherLps],
+        [existingRel.id, armada.namaSupir, primaryForOtherLps],
       );
     } else {
       const primaryExists = (await client.query<{ exists: boolean }>(

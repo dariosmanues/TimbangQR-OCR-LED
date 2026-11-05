@@ -1,4 +1,4 @@
-export type UserRole = "SUPER_ADMIN" | "ADMIN" | "OPERATOR" | string;
+export type UserRole = "SUPER_ADMIN" | "ADMIN" | "ADMIN_TRANSAKSI" | "OPERATOR" | string;
 
 export type SessionUser = {
   id: number;
@@ -76,5 +76,7 @@ export type WeighingRow = {
   lps_id?: number | null;
   vehicle_type?: string | null;
   waste_type?: string | null;
+  source?: string | null;
   source_note?: string | null;
+  indicator_raw?: string | null;
 };

@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { ArrowLeft, Gauge, ShieldCheck, FileText, MapPin, User, Calendar, Truck } from "lucide-react";
+import { ArrowLeft, Gauge, ShieldCheck, Lock, BarChart3, Camera } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import PrintButton from "@/components/PrintButton";
@@ -15,7 +15,41 @@ export const dynamic = "force-dynamic";
 
 export default async function VehicleDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const user = await getSession();
-  const canCrud = isSuperAdmin(user);
+  const canManage = isSuperAdmin(user);
+
+  if (!canManage) {
+    return (
+      <article className="card" style={{ maxWidth: 640, margin: "32px auto", textAlign: "center", padding: "36px 24px" }}>
+        <div
+          style={{
+            width: 64,
+            height: 64,
+            borderRadius: 18,
+            background: "#fef3c7",
+            color: "#d97706",
+            display: "grid",
+            placeItems: "center",
+            margin: "0 auto 16px",
+            border: "1px solid #fde68a",
+          }}
+        >
+          <Lock size={30} />
+        </div>
+        <h1 style={{ fontSize: 22, margin: "0 0 8px" }}>Detail Master Armada Dinonaktifkan</h1>
+        <p className="muted" style={{ fontSize: 14, lineHeight: 1.6, margin: "0 auto 24px", maxWidth: 480 }}>
+          Akses ke halaman <strong>Master Armada</strong> hanya dapat dibuka oleh <strong>👑 Master ADMIN</strong>.
+        </p>
+        <div style={{ display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap" }}>
+          <Link href="/dashboard" className="btn btn-secondary">
+            <BarChart3 size={16} /> Ke Dashboard
+          </Link>
+          <Link href="/scan" className="btn btn-primary">
+            <Camera size={16} /> Scan & Timbang
+          </Link>
+        </div>
+      </article>
+    );
+  }
 
   const { id } = await params;
   const [result, lps] = await Promise.all([
@@ -34,19 +68,12 @@ export default async function VehicleDetailPage({ params }: { params: Promise<{ 
           </Link>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8 }}>
             <h1 style={{ margin: 0 }}>{vehicle.plate_number}</h1>
-            {canCrud ? (
-              <VehicleStatusToggle
-                key={`${vehicle.id}-${vehicle.active}`}
-                vehicleId={vehicle.id}
-                initialActive={vehicle.active}
-                plateNumber={vehicle.plate_number}
-                code={vehicle.code}
-              />
-            ) : (
-              <span className={`badge ${vehicle.active ? "green" : "gray"}`}>
-                {vehicle.active ? "Aktif" : "Nonaktif"}
-              </span>
-            )}
+            <VehicleStatusToggle
+              vehicleId={vehicle.id}
+              initialActive={vehicle.active}
+              plateNumber={vehicle.plate_number}
+              code={vehicle.code}
+            />
           </div>
           <p style={{ marginTop: 4 }}>
             <strong>{vehicle.code}</strong> · {vehicle.vehicle_type}
@@ -54,7 +81,7 @@ export default async function VehicleDetailPage({ params }: { params: Promise<{ 
           </p>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          {canCrud && <ArmadaDetailActions vehicle={vehicle} lpsOptions={lps} />}
+          <ArmadaDetailActions vehicle={vehicle} lpsOptions={lps} />
           <Link className="btn btn-secondary" href={`/scan?token=ARMADA-${vehicle.plate_normalized || vehicle.plate_number.replace(/\s+/g, "")}`}>
             <Gauge size={17} /> Timbang armada
           </Link>

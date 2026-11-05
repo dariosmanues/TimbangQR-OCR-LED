@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getSession } from "@/lib/auth";
+import { getSession, isSuperAdmin } from "@/lib/auth";
 import { dbOne, dbQuery } from "@/lib/db";
 import { tokenFromValue } from "@/lib/qr-token";
 import { parseLegacyArmadaQr, resolveLegacyArmadaQr } from "@/lib/legacy-armada-qr";
@@ -93,6 +93,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ toke
 
   // 3. QR LPS wajib divalidasi secara server-to-server ke aplikasi LPS
   const lpsIdentity = parseLpsQrToken(rawToken);
+  let lpsFetchError: string | null = null;
   if (lpsIdentity) {
     try {
       const remoteArmada = await fetchVerifiedLpsArmada(lpsIdentity);
@@ -104,19 +105,33 @@ export async function GET(request: Request, { params }: { params: Promise<{ toke
         headers: { "Cache-Control": "private, no-store" },
       });
     } catch (error) {
-      if (error instanceof LpsQrError) {
-        return NextResponse.json({ error: error.message, burned: error.status === 400 }, { status: error.status });
+      if (error instanceof LpsQrError && error.status === 400) {
+        // QR LPS bersifat temporer / sekali pakai per perjalanan. Jika sudah hangus, tolak transaksi.
+        return NextResponse.json(
+          { error: error.message, burned: true },
+          { status: 400 }
+        );
       }
-      console.error("[LPS QR] Tidak dapat menghubungkan master:", error);
-      return NextResponse.json(
-        { error: "Gagal menghubungkan QR LPS dengan master TimbangQR. Hubungi administrator." },
-        { status: 500 },
-      );
+      lpsFetchError = error instanceof Error ? error.message : "Validasi QR LPS gagal.";
+      console.warn("[LPS QR] Validasi API LPS gagal / offline. Mencoba fallback master kendaraan:", lpsFetchError);
     }
   }
 
-  // 4. Jalur fallback untuk QR internal TimbangQR, nomor polisi, izin, dan kode armada
-  const plateCompact = rawToken.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  // 4. Cek otorisasi: Jika request berasal dari input ketik plat manual (?manual=1),
+  // HANYA boleh diakses oleh Master ADMIN. Hasil Scan QR kamera/gambar (termasuk kartu QR
+  // yang berisi plat nomor seperti BM8606QQ, kode armada, atau nomor izin) tetap diizinkan.
+  const isManualRequest = new URL(request.url).searchParams.get("manual") === "1";
+  if (isManualRequest && !isSuperAdmin(user)) {
+    return NextResponse.json(
+      {
+        error: "Akses ditolak: Input nomor plat manual telah dinonaktifkan untuk Administrator. Seluruh transaksi wajib menggunakan Scan Barcode / QR Code resmi armada.",
+      },
+      { status: 403 }
+    );
+  }
+
+  // 5. Jalur fallback untuk QR internal TimbangQR, nomor polisi, izin, kode armada, atau LPS token yang offline
+  const plateCompact = (lpsIdentity?.normalizedPlate || rawToken).toUpperCase().replace(/[^A-Z0-9]/g, "");
   let vehicle = await dbOne<VehicleRow>([
     "SELECT id, code, plate_number, plate_normalized, vehicle_type, waste_type,",
     "default_tare_kg, qr_token, active FROM vehicles WHERE (",
@@ -125,6 +140,21 @@ export async function GET(request: Request, { params }: { params: Promise<{ toke
     "OR UPPER(COALESCE(nomor_izin, '')) = UPPER($1)",
     ") ORDER BY active DESC, id LIMIT 1",
   ].join(" "), [rawToken, plateCompact]);
+
+  // Fallback pencocokan jika ada pergantian seri plat (misal BM <-> BA pada kartu fisik lama)
+  if (!vehicle && plateCompact.length >= 6) {
+    const swapped = plateCompact.startsWith("BM")
+      ? plateCompact.replace(/^BM/, "BA")
+      : plateCompact.startsWith("BA")
+      ? plateCompact.replace(/^BA/, "BM")
+      : null;
+    if (swapped) {
+      vehicle = await dbOne<VehicleRow>(
+        "SELECT id, code, plate_number, plate_normalized, vehicle_type, waste_type, default_tare_kg, qr_token, active FROM vehicles WHERE plate_normalized = $1 OR qr_token = $1 ORDER BY active DESC, id LIMIT 1",
+        [swapped]
+      );
+    }
+  }
 
   // Jika kendaraan nonaktif, otomatis aktifkan kembali (JANGAN DITOLAK)
   if (vehicle && !vehicle.active) {
@@ -149,8 +179,11 @@ export async function GET(request: Request, { params }: { params: Promise<{ toke
   }
 
   if (!vehicle) {
+    if (lpsFetchError) {
+      return NextResponse.json({ error: lpsFetchError }, { status: 400 });
+    }
     return NextResponse.json(
-      { error: `QR armada (${rawToken}) tidak ditemukan atau belum terdaftar di sistem timbangan.` },
+      { error: `Nomor polisi / armada (${rawToken}) tidak ditemukan di database Master Armada. Hanya armada yang terdaftar di Master Armada yang dapat ditimbang.` },
       { status: 404 }
     );
   }

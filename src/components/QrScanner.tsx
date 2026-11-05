@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Camera, CheckCircle2, Keyboard, RefreshCw, ScanLine, Sparkles, Upload } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Camera, CheckCircle2, Keyboard, Lock, RefreshCw, ScanLine, Upload } from "lucide-react";
 import { tokenFromValue } from "@/lib/qr-token";
 import { decodeQrRgba } from "@/lib/qr-image-decode";
 import { getCameraStreamWithFallback, formatCameraErrorMessage } from "@/lib/cameraHelper";
@@ -49,6 +49,7 @@ function decodeUploadedQr(img: HTMLImageElement): string | null {
   }
   return null;
 }
+
 function playBeep() {
   try {
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
@@ -67,7 +68,13 @@ function playBeep() {
   } catch {}
 }
 
-export default function QrScanner({ onToken }: { onToken: (token: string) => void }) {
+export default function QrScanner({
+  onToken,
+  canManualInput = false,
+}: {
+  onToken: (token: string, isManual?: boolean) => void;
+  canManualInput?: boolean;
+}) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -82,6 +89,101 @@ export default function QrScanner({ onToken }: { onToken: (token: string) => voi
   const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
   const [cameraId, setCameraId] = useState("");
   const [uploading, setUploading] = useState(false);
+
+  type MasterArmadaOption = {
+    id: number;
+    code: string;
+    plate_number: string;
+    plate_normalized: string;
+    vehicle_type: string;
+    nama_lps: string | null;
+  };
+
+  const [masterList, setMasterList] = useState<MasterArmadaOption[]>([]);
+  const [showDropdown, setShowDropdown] = useState(false);
+  const [manualError, setManualError] = useState("");
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let ignore = false;
+    async function loadMasterArmada() {
+      try {
+        const res = await fetch("/api/vehicles", { cache: "no-store" });
+        if (res.ok) {
+          const data = await res.json();
+          if (!ignore && Array.isArray(data)) {
+            setMasterList(data);
+          }
+        }
+      } catch (err) {
+        console.error("Gagal memuat list master armada:", err);
+      }
+    }
+    loadMasterArmada();
+    return () => {
+      ignore = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setShowDropdown(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const filteredArmada = useMemo(() => {
+    const q = manual.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (!q) {
+      return masterList.slice(0, 10);
+    }
+    return masterList
+      .filter((item) => {
+        const matchPlate =
+          item.plate_normalized?.includes(q) ||
+          item.plate_number.toUpperCase().replace(/\s+/g, "").includes(q);
+        const matchCode = item.code?.toUpperCase().includes(q);
+        const matchLps = (item.nama_lps || "").toUpperCase().includes(q);
+        return matchPlate || matchCode || matchLps;
+      })
+      .slice(0, 20);
+  }, [manual, masterList]);
+
+  function handleSelectArmada(item: MasterArmadaOption) {
+    setManual(item.plate_number);
+    setManualError("");
+    setShowDropdown(false);
+    onToken(item.plate_number, true);
+  }
+
+  function handleManualSubmit() {
+    const q = manual.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (!q) {
+      setManualError("Ketik nomor polisi terlebih dahulu.");
+      return;
+    }
+
+    const matched = masterList.find(
+      (item) =>
+        item.plate_normalized === q ||
+        item.plate_number.toUpperCase().replace(/\s+/g, "") === q ||
+        item.code?.toUpperCase() === q
+    );
+
+    if (!matched) {
+      setManualError(
+        `Nomor polisi "${manual}" tidak terdaftar di database Master Armada. Hanya armada yang ada di Master Armada yang dapat ditimbang.`
+      );
+      return;
+    }
+
+    setManualError("");
+    setShowDropdown(false);
+    onToken(matched.plate_number, true);
+  }
 
   const refreshCameras = useCallback(async () => {
     try {
@@ -227,8 +329,6 @@ export default function QrScanner({ onToken }: { onToken: (token: string) => voi
               const ctx = canvas.getContext("2d");
               if (ctx) {
                 ctx.drawImage(v, 0, 0, w, h);
-                // Local image decoder works on Vercel even when the optional
-                // external YOLO/OpenCV QR endpoint is unavailable.
                 const pixels = ctx.getImageData(0, 0, w, h);
                 const localCode = decodeQrRgba(pixels.data, w, h);
                 if (localCode && !isDecodingRef.current) {
@@ -482,32 +582,173 @@ export default function QrScanner({ onToken }: { onToken: (token: string) => voi
 
         <div style={{ height: 16 }} />
 
-        <div className="field">
-          <label>
-            <Keyboard size={14} style={{ verticalAlign: "middle" }} /> Input Nopol / Kode / Token Manual
-          </label>
-          <div style={{ display: "flex", gap: 9 }}>
-            <input
-              className="input"
-              value={manual}
-              onChange={(e) => setManual(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && manual.trim()) {
-                  e.preventDefault();
-                  onToken(tokenFromValue(manual));
-                }
-              }}
-              placeholder="Contoh: BM 8106 QP atau ARM-HJ-0001 atau token..."
-            />
-            <button
-              className="btn btn-secondary"
-              type="button"
-              onClick={() => manual.trim() && onToken(tokenFromValue(manual))}
-            >
-              Buka
-            </button>
+        {/* Input / Pencarian Plat Manual (Khusus Master ADMIN) */}
+        {canManualInput ? (
+          <div className="field" ref={dropdownRef} style={{ position: "relative" }}>
+            <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+              <span>
+                <Keyboard size={14} style={{ verticalAlign: "middle" }} /> Cari / Input Nopol Master Armada (Mode Master ADMIN)
+              </span>
+              <span
+                className="badge"
+                style={{
+                  fontSize: 11,
+                  fontWeight: 600,
+                  background: "#f0fdf4",
+                  color: "#166534",
+                  border: "1px solid #bbf7d0",
+                }}
+              >
+                ✓ Database Master ({masterList.length > 0 ? `${masterList.length} Armada` : "Memuat..."})
+              </span>
+            </label>
+
+            <div style={{ display: "flex", gap: 9 }}>
+              <div style={{ flex: 1, position: "relative" }}>
+                <input
+                  className="input"
+                  value={manual}
+                  onChange={(e) => {
+                    setManual(e.target.value);
+                    setManualError("");
+                    setShowDropdown(true);
+                  }}
+                  onFocus={() => setShowDropdown(true)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleManualSubmit();
+                    }
+                  }}
+                  placeholder="Ketik plat atau nama LPS (Contoh: BM 8924 QN)..."
+                  autoComplete="off"
+                  list="master-armada-datalist"
+                />
+
+                <datalist id="master-armada-datalist">
+                  {masterList.slice(0, 100).map((v) => (
+                    <option key={v.id} value={v.plate_number}>
+                      {v.plate_number} — {v.vehicle_type} ({v.nama_lps || "Harapan Jaya"})
+                    </option>
+                  ))}
+                </datalist>
+
+                {/* Popover Dropdown Tampilan Database Master ARMADA */}
+                {showDropdown && (
+                  <div
+                    style={{
+                      position: "absolute",
+                      top: "calc(100% + 4px)",
+                      left: 0,
+                      right: 0,
+                      maxHeight: 280,
+                      overflowY: "auto",
+                      background: "#ffffff",
+                      border: "1.5px solid #cbd5e1",
+                      borderRadius: 10,
+                      boxShadow: "0 12px 28px rgba(0,0,0,0.15)",
+                      zIndex: 9999,
+                    }}
+                  >
+                    <div
+                      style={{
+                        padding: "6px 10px",
+                        fontSize: 11,
+                        background: "#f8fafc",
+                        borderBottom: "1px solid #e2e8f0",
+                        color: "#64748b",
+                        fontWeight: 600,
+                        display: "flex",
+                        justifyContent: "space-between",
+                      }}
+                    >
+                      <span>DATABASE MASTER ARMADA ({filteredArmada.length}):</span>
+                      <span>Klik untuk pilih</span>
+                    </div>
+
+                    {filteredArmada.length === 0 ? (
+                      <div style={{ padding: "14px 12px", textAlign: "center", color: "#dc2626", fontSize: 12.5 }}>
+                        ⚠️ Nomor polisi tidak ditemukan di Master Armada
+                      </div>
+                    ) : (
+                      filteredArmada.map((item) => (
+                        <div
+                          key={item.id}
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            handleSelectArmada(item);
+                          }}
+                          style={{
+                            padding: "8px 12px",
+                            borderBottom: "1px solid #f1f5f9",
+                            cursor: "pointer",
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                          }}
+                          onMouseEnter={(e) => (e.currentTarget.style.background = "#f1f5f9")}
+                          onMouseLeave={(e) => (e.currentTarget.style.background = "#ffffff")}
+                        >
+                          <div>
+                            <strong style={{ fontSize: 13.5, color: "#0f172a", letterSpacing: 0.5 }}>
+                              {item.plate_number}
+                            </strong>
+                            <div style={{ fontSize: 11, color: "#64748b" }}>
+                              {item.nama_lps || "LPS Harapan Jaya"} · Kode: {item.code}
+                            </div>
+                          </div>
+                          <span className="badge" style={{ fontSize: 10, fontWeight: 700 }}>
+                            {item.vehicle_type}
+                          </span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <button
+                className="btn btn-primary"
+                type="button"
+                onClick={handleManualSubmit}
+                disabled={!manual.trim()}
+              >
+                Buka
+              </button>
+            </div>
+
+            {manualError && (
+              <div style={{ marginTop: 6, color: "#dc2626", fontSize: 12, fontWeight: 600 }}>
+                ⚠️ {manualError}
+              </div>
+            )}
           </div>
-        </div>
+        ) : (
+          <div
+            style={{
+              padding: "12px 16px",
+              background: "#f8fafc",
+              border: "1px solid #cbd5e1",
+              borderRadius: 12,
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+              fontSize: 12,
+              color: "#475569",
+              lineHeight: 1.5,
+            }}
+          >
+            <Lock size={18} style={{ color: "#d97706", flexShrink: 0 }} />
+            <div>
+              <strong style={{ color: "#0f172a", display: "block", marginBottom: 2 }}>
+                Ketik Plat Manual Dinonaktifkan (Wajib Scan Barcode / QR Code)
+              </strong>
+              <span>
+                Untuk menjaga integritas data, Administrator hanya dapat melakukan transaksi penimbangan melalui <strong>Scan QR Code Resmi Armada</strong> (Kartu Master Armada atau QR LPS). Akses ketik plat manual hanya dapat dibuka oleh <strong>Master ADMIN</strong>.
+              </span>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

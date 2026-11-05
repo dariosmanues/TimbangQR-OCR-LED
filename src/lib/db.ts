@@ -430,33 +430,37 @@ export async function ensureAdminUsers(client: PoolClient) {
   const adminEmail = (process.env.ADMIN_EMAIL || "admin@lps.local").trim();
   const adminPassword = (process.env.ADMIN_PASSWORD || "Admin123!").trim();
 
-  // Super Admin (Satu-satunya role dengan hak akses CRUD)
+  const txAdminEmail = (process.env.ADMIN_TRANSAKSI_EMAIL || "admin.transaksi@lps.local").trim();
+  const txAdminPassword = (process.env.ADMIN_TRANSAKSI_PASSWORD || "AdminTransaksi123!").trim();
+
+  // Master ADMIN (Satu-satunya role dengan hak akses CRUD penuh).
+  // password_hash TIDAK ditimpa saat konflik agar password yang sudah diubah lewat /users tetap aman.
   await client.query(`
     INSERT INTO users (email, name, password_hash, role, active)
     VALUES ($1, 'Super Administrator LPS', $2, 'SUPER_ADMIN', TRUE)
     ON CONFLICT (email) DO UPDATE SET
       role = 'SUPER_ADMIN',
       name = 'Super Administrator LPS',
-      password_hash = EXCLUDED.password_hash,
       active = TRUE
   `, [superAdminEmail, bcrypt.hashSync(superAdminPassword, 12)]);
 
-  // Administrator (Operasional / Read-Only, tanpa hak CRUD)
+  // Administrator LPS (wajib scan QR, tanpa CRUD)
   await client.query(`
     INSERT INTO users (email, name, password_hash, role, active)
     VALUES ($1, 'Administrator LPS', $2, 'ADMIN', TRUE)
     ON CONFLICT (email) DO UPDATE SET
       role = 'ADMIN',
-      password_hash = EXCLUDED.password_hash,
       active = TRUE
   `, [adminEmail, bcrypt.hashSync(adminPassword, 12)]);
 
-  // Hapus akun Admin Transaksi jika masih ada di database
+  // Admin Transaksi
   await client.query(`
-    DELETE FROM users 
-    WHERE email = 'admin.transaksi@lps.local' 
-       OR role = 'ADMIN_TRANSAKSI'
-  `);
+    INSERT INTO users (email, name, password_hash, role, active)
+    VALUES ($1, 'Admin Transaksi LPS', $2, 'ADMIN_TRANSAKSI', TRUE)
+    ON CONFLICT (email) DO UPDATE SET
+      role = 'ADMIN_TRANSAKSI',
+      active = TRUE
+  `, [txAdminEmail, bcrypt.hashSync(txAdminPassword, 12)]);
 }
 
 async function ensureSerialDevice(client: PoolClient) {
