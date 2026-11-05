@@ -35,7 +35,6 @@ export async function GET(request: Request) {
     device = await dbOne<WeighbridgeDeviceStatus>(`
       SELECT id, device_code, location_name, port_name, connection_type, baud_rate, last_seen_at, active
       FROM weighbridge_devices
-      WHERE active = TRUE
       ORDER BY last_seen_at DESC NULLS LAST, id ASC
       LIMIT 1
     `);
@@ -58,7 +57,8 @@ export async function GET(request: Request) {
     Number.isFinite(readingSeenMs) ? readingSeenMs : 0
   );
   const lastSeenAt = latestSeenMs > 0 ? new Date(latestSeenMs).toISOString() : null;
-  const bridgeOnline = Boolean(latestSeenMs > 0 && Date.now() - latestSeenMs <= 15 * 60 * 1000);
+  const isDeviceActive = device ? Boolean(device.active) : true;
+  const bridgeOnline = Boolean(isDeviceActive && latestSeenMs > 0 && Date.now() - latestSeenMs <= 15 * 60 * 1000);
 
   return NextResponse.json(
     {
@@ -66,6 +66,7 @@ export async function GET(request: Request) {
       device,
       lastSeenAt,
       bridgeOnline,
+      active: isDeviceActive,
     },
     { headers: { "Cache-Control": "no-store, max-age=0" } }
   );

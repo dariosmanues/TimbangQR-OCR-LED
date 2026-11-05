@@ -64,7 +64,6 @@ export async function POST(request: Request) {
         ON CONFLICT (device_code) DO UPDATE SET
           api_key_hash = EXCLUDED.api_key_hash,
           protocol = 'DIRECT_SERIAL',
-          active = TRUE,
           last_seen_at = NOW()
         RETURNING id, device_code, api_key_hash, active
       `, [
@@ -79,8 +78,15 @@ export async function POST(request: Request) {
       device && (secureEqual(device.api_key_hash, incomingHash) || matchesEnvOrDefault)
     );
 
-    if (!device || !device.active || !keyValid) {
+    if (!device || !keyValid) {
       return NextResponse.json({ error: "Koneksi serial atau API key tidak valid." }, { status: 401 });
+    }
+
+    if (!device.active) {
+      return NextResponse.json({
+        error: "Timbangan dinonaktifkan oleh Operator. Silakan klik 'Aktivasi Timbangan' di web.",
+        active: false,
+      }, { status: 403 });
     }
 
     const recordedAt = input.timestamp && !Number.isNaN(Date.parse(input.timestamp))
@@ -94,8 +100,7 @@ export async function POST(request: Request) {
         SET last_seen_at = NOW(),
             firmware_version = 'PC-SERIAL-BRIDGE',
             port_name = COALESCE($1, port_name),
-            connection_type = COALESCE($2, connection_type),
-            active = TRUE
+            connection_type = COALESCE($2, connection_type)
         WHERE id = $3
       `, [input.serial_port || null, input.interface_type || null, device.id]);
 

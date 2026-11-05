@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AlertTriangle,
   ArrowLeft,
   ArrowRight,
   Cable,
@@ -9,6 +10,8 @@ import {
   CheckCircle2,
   Cloud,
   Layers,
+  Power,
+  PowerOff,
   QrCode,
   RefreshCw,
   Save,
@@ -102,8 +105,11 @@ export default function WeighingWorkspace({
   const [bridgeLastSeen, setBridgeLastSeen] = useState<string | null>(null);
   const [bridgeOnline, setBridgeOnline] = useState(false);
   const [loadingBridge, setLoadingBridge] = useState(false);
+  const [togglingBridge, setTogglingBridge] = useState(false);
   const [activeSource, setActiveSource] = useState<"SERIAL_BRIDGE" | "OCR_LED">("SERIAL_BRIDGE");
   const lastAppliedReadingIdRef = useRef<number | null>(null);
+
+  const isDeviceActive = serialDevice ? serialDevice.active !== false : true;
 
   const [lpsId, setLpsId] = useState("");
   const [driverName, setDriverName] = useState("");
@@ -157,6 +163,25 @@ export default function WeighingWorkspace({
       if (!silent) setLoadingBridge(false);
     }
   }, []);
+
+  const handleToggleBridge = useCallback(async (action: "connect" | "disconnect") => {
+    setTogglingBridge(true);
+    try {
+      const response = await fetch("/api/serial/control", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, device_code: serialDevice?.device_code }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Gagal mengubah status timbangan.");
+      setMessage(action === "connect" ? "✓ Timbangan berhasil diaktifkan kembali." : "✓ Timbangan didiskoneksi. Pembacaan otomatis dijeda.");
+      await refreshBridge(false);
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Gagal mengubah status timbangan.");
+    } finally {
+      setTogglingBridge(false);
+    }
+  }, [serialDevice?.device_code, refreshBridge]);
 
   useEffect(() => {
     const initial = window.setTimeout(() => void refreshBridge(false), 0);
@@ -492,22 +517,49 @@ export default function WeighingWorkspace({
               <p>Terhubung otomatis dengan aplikasi TimbangQR Bridge di PC Operator untuk menerima berat indikator secara langsung.</p>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <span className={`badge ${bridgeOnline ? "green" : "orange"}`}>
+              <span className={`badge ${!isDeviceActive ? "red" : bridgeOnline ? "green" : "orange"}`}>
                 <span className="dot" />
-                {bridgeOnline ? "TimbangQR Bridge Online" : "Menunggu Sinyal Bridge"}
+                {!isDeviceActive ? "Timbangan Nonaktif" : bridgeOnline ? "TimbangQR Bridge Online" : "Menunggu Sinyal Bridge"}
               </span>
               <button
                 type="button"
                 className="btn btn-secondary"
                 style={{ padding: "6px 12px", minHeight: 34, fontSize: 12 }}
                 onClick={() => void refreshBridge(false)}
-                disabled={loadingBridge}
+                disabled={loadingBridge || togglingBridge}
               >
-                <RefreshCw size={14} /> {loadingBridge ? "Memuat..." : "Segarkan Bridge"}
+                <RefreshCw size={14} /> {loadingBridge ? "Memuat..." : "Segarkan"}
               </button>
+              {!isDeviceActive ? (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  style={{ padding: "6px 12px", minHeight: 34, fontSize: 12, background: "#08784f", borderColor: "#08784f", color: "#fff" }}
+                  onClick={() => void handleToggleBridge("connect")}
+                  disabled={togglingBridge}
+                >
+                  <Power size={14} /> {togglingBridge ? "Mengaktifkan..." : "Aktivasi Timbangan"}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn-danger"
+                  style={{ padding: "6px 12px", minHeight: 34, fontSize: 12, borderColor: "#fca5a5" }}
+                  onClick={() => void handleToggleBridge("disconnect")}
+                  disabled={togglingBridge}
+                >
+                  <PowerOff size={14} /> {togglingBridge ? "Memproses..." : "Diskoneksi Timbangan"}
+                </button>
+              )}
             </div>
           </div>
           <div className="card-body">
+            {!isDeviceActive && (
+              <div style={{ background: "#fff0f0", border: "1px solid #fecaca", borderRadius: 8, padding: "8px 12px", marginBottom: 12, color: "#991b1b", fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
+                <AlertTriangle size={15} style={{ flexShrink: 0 }} />
+                <span>Timbangan sedang <b>didiskoneksi secara manual</b>. Sinyal bridge dijeda. Klik <b>Aktivasi Timbangan</b> untuk menyambungkannya kembali.</span>
+              </div>
+            )}
             <div className="summary-box">
               <div className="summary-item">
                 <span>Perangkat & Port</span>
@@ -518,12 +570,14 @@ export default function WeighingWorkspace({
               </div>
               <div className="summary-item">
                 <span>Berat dari Bridge</span>
-                <strong style={{ color: bridgeOnline ? "var(--primary)" : undefined }}>
-                  {serialReading?.weight_kg != null
-                    ? `${new Intl.NumberFormat("id-ID").format(serialReading.weight_kg)} kg`
-                    : "0 kg"}{" "}
+                <strong style={{ color: !isDeviceActive ? "#94a3b8" : bridgeOnline ? "var(--primary)" : undefined }}>
+                  {!isDeviceActive
+                    ? "NONAKTIF"
+                    : serialReading?.weight_kg != null
+                      ? `${new Intl.NumberFormat("id-ID").format(serialReading.weight_kg)} kg`
+                      : "0 kg"}{" "}
                   <small style={{ fontSize: 11, fontWeight: 700, opacity: 0.8 }}>
-                    ({serialReading?.stable ? "STABIL" : bridgeOnline ? "SIAP / AKTIF" : "BELUM ADA DATA"})
+                    ({!isDeviceActive ? "MANUAL OFF" : serialReading?.stable ? "STABIL" : bridgeOnline ? "SIAP / AKTIF" : "BELUM ADA DATA"})
                   </small>
                 </strong>
               </div>
@@ -536,7 +590,7 @@ export default function WeighingWorkspace({
               </div>
             </div>
 
-            {serialReading && serialReading.weight_kg > 0 && (
+            {isDeviceActive && serialReading && serialReading.weight_kg > 0 && (
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
                 <span className="help">
                   String indikator terakhir: <code>{serialReading.indicator_raw || "-"}</code>
@@ -643,13 +697,15 @@ export default function WeighingWorkspace({
               <div>
                 <strong>{new Intl.NumberFormat("id-ID").format(displayedGross)}</strong>
                 <span>
-                  {displayedGross > 0
-                    ? activeSource === "SERIAL_BRIDGE" && serialReading?.weight_kg === displayedGross
-                      ? (serialReading.stable ? "TIMBANGQR BRIDGE STABIL · KG" : "TIMBANGQR BRIDGE · KG")
-                      : (ocrReading?.stable ? "OCR LED STABIL · KG" : "GROSS TERKONFIRMASI · KG")
-                    : bridgeOnline
-                      ? "TIMBANGQR BRIDGE TERHUBUNG (0 KG) · MENUNGGU BEBAN TIMBANGAN"
-                      : "MENUNGGU BEBAN DARI TIMBANGQR BRIDGE / OCR LED · KG"}
+                  {!isDeviceActive
+                    ? "TIMBANGAN DIDISKONEKSI · KLIK AKTIVASI UNTUK MEMBACA BERAT"
+                    : displayedGross > 0
+                      ? activeSource === "SERIAL_BRIDGE" && serialReading?.weight_kg === displayedGross
+                        ? (serialReading.stable ? "TIMBANGQR BRIDGE STABIL · KG" : "TIMBANGQR BRIDGE · KG")
+                        : (ocrReading?.stable ? "OCR LED STABIL · KG" : "GROSS TERKONFIRMASI · KG")
+                      : bridgeOnline
+                        ? "TIMBANGQR BRIDGE TERHUBUNG (0 KG) · MENUNGGU BEBAN TIMBANGAN"
+                        : "MENUNGGU BEBAN DARI TIMBANGQR BRIDGE / OCR LED · KG"}
                 </span>
               </div>
             </div>
