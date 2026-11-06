@@ -28,8 +28,22 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Serial API key tidak ditemukan." }, { status: 401 });
   }
 
+  // 1. Cek master switch di settings: jika dinonaktifkan manual, TOLAK SEMUA INGEST DARI BRIDGE
+  const scaleSetting = await dbOne<{ value: string }>(`
+    SELECT value FROM settings WHERE key = 'scale_active' LIMIT 1
+  `);
+  if (scaleSetting && scaleSetting.value === "false") {
+    return NextResponse.json({
+      error: "Timbangan dinonaktifkan secara manual oleh Operator. Untuk mengaktifkan kembali, klik 'Aktivasi Timbangan' di web.",
+      active: false,
+      manuallyDisabled: true,
+    }, { status: 403 });
+  }
+
   try {
     const input = schema.parse(await request.json());
+    const cleanDeviceId = input.device_id.trim();
+
     let device = await dbOne<{
       id: number;
       device_code: string;
@@ -38,8 +52,10 @@ export async function POST(request: Request) {
     }>(`
       SELECT id, device_code, api_key_hash, active
       FROM weighbridge_devices
-      WHERE device_code = $1
-    `, [input.device_id]);
+      WHERE device_code = $1 OR device_code = $2
+      ORDER BY active DESC, id ASC
+      LIMIT 1
+    `, [cleanDeviceId, input.device_id]);
 
     const incomingHash = hashDeviceKey(apiKey);
     const configuredKey = (process.env.SERIAL_API_KEY || "").trim();
@@ -67,7 +83,7 @@ export async function POST(request: Request) {
           last_seen_at = NOW()
         RETURNING id, device_code, api_key_hash, active
       `, [
-        input.device_id,
+        cleanDeviceId,
         incomingHash,
         input.interface_type || "RS232",
         input.serial_port || null,
@@ -82,10 +98,12 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Koneksi serial atau API key tidak valid." }, { status: 401 });
     }
 
+    // Jika perangkat berstatus active = false, tolak!
     if (!device.active) {
       return NextResponse.json({
-        error: "Timbangan dinonaktifkan oleh Operator. Silakan klik 'Aktivasi Timbangan' di web.",
+        error: "Timbangan dinonaktifkan secara manual oleh Operator. Untuk mengaktifkan kembali, klik 'Aktivasi Timbangan' di web.",
         active: false,
+        manuallyDisabled: true,
       }, { status: 403 });
     }
 

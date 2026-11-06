@@ -109,7 +109,7 @@ export default function WeighingWorkspace({
   const [activeSource, setActiveSource] = useState<"SERIAL_BRIDGE" | "OCR_LED">("SERIAL_BRIDGE");
   const lastAppliedReadingIdRef = useRef<number | null>(null);
 
-  const isDeviceActive = serialDevice ? serialDevice.active !== false : true;
+  const [isScaleActive, setIsScaleActive] = useState(true);
 
   const [lpsId, setLpsId] = useState("");
   const [driverName, setDriverName] = useState("");
@@ -127,18 +127,21 @@ export default function WeighingWorkspace({
       const response = await fetch("/api/serial/latest", { cache: "no-store" });
       if (!response.ok) return;
       const data = await response.json();
-      const nextReading = (data.reading || null) as SerialBridgeReading | null;
+      const activeState = Boolean(data.active !== false && data.manuallyDisabled !== true);
+      setIsScaleActive(activeState);
+
       const nextDevice = (data.device || null) as SerialBridgeDevice | null;
-      const lastSeen = data.lastSeenAt || nextDevice?.last_seen_at || nextReading?.recorded_at || null;
-      const isOnline = Boolean(
-        data.bridgeOnline ||
-          (lastSeen && !Number.isNaN(Date.parse(lastSeen)) && Date.now() - Date.parse(lastSeen) <= 15 * 60 * 1000)
-      );
+      const nextReading = activeState ? ((data.reading || null) as SerialBridgeReading | null) : null;
+      const isOnline = Boolean(activeState && data.bridgeOnline);
+      const lastSeen = activeState ? (data.lastSeenAt || nextDevice?.last_seen_at || nextReading?.recorded_at || null) : null;
 
       setSerialReading(nextReading);
-      setSerialDevice(nextDevice);
+      setSerialDevice(nextDevice ? { ...nextDevice, active: activeState } : null);
       setBridgeLastSeen(lastSeen);
       setBridgeOnline(isOnline);
+
+      // JIKA TIMBANGAN DINONAKTIFKAN, JANGAN PERNAH OTOMATIS TARIK BERAT DARI BRIDGE!
+      if (!activeState) return;
 
       if (nextReading && nextReading.weight_kg > 0) {
         const isRecentReading =
@@ -174,7 +177,16 @@ export default function WeighingWorkspace({
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Gagal mengubah status timbangan.");
-      setMessage(action === "connect" ? "✓ Timbangan berhasil diaktifkan kembali." : "✓ Timbangan didiskoneksi. Pembacaan otomatis dijeda.");
+      
+      const nextActive = action === "connect";
+      setIsScaleActive(nextActive);
+      if (!nextActive) {
+        setBridgeOnline(false);
+        setSerialReading(null);
+      }
+      setMessage(nextActive
+        ? "✓ Timbangan berhasil diaktifkan secara manual."
+        : "✓ Timbangan dinonaktifkan secara manual. Status akan tetap nonaktif sampai diaktifkan manual.");
       await refreshBridge(false);
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Gagal mengubah status timbangan.");
@@ -517,9 +529,9 @@ export default function WeighingWorkspace({
               <p>Terhubung otomatis dengan aplikasi TimbangQR Bridge di PC Operator untuk menerima berat indikator secara langsung.</p>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <span className={`badge ${!isDeviceActive ? "red" : bridgeOnline ? "green" : "orange"}`}>
+              <span className={`badge ${!isScaleActive ? "red" : bridgeOnline ? "green" : "orange"}`}>
                 <span className="dot" />
-                {!isDeviceActive ? "Timbangan Nonaktif" : bridgeOnline ? "TimbangQR Bridge Online" : "Menunggu Sinyal Bridge"}
+                {!isScaleActive ? "Timbangan Nonaktif (Manual)" : bridgeOnline ? "TimbangQR Bridge Online" : "Menunggu Sinyal Bridge"}
               </span>
               <button
                 type="button"
@@ -528,9 +540,9 @@ export default function WeighingWorkspace({
                 onClick={() => void refreshBridge(false)}
                 disabled={loadingBridge || togglingBridge}
               >
-                <RefreshCw size={14} /> {loadingBridge ? "Memuat..." : "Segarkan"}
+                <RefreshCw size={14} className={loadingBridge ? "spin" : ""} /> {loadingBridge ? "Memuat..." : "Segarkan"}
               </button>
-              {!isDeviceActive ? (
+              {!isScaleActive ? (
                 <button
                   type="button"
                   className="btn btn-primary"
@@ -554,10 +566,10 @@ export default function WeighingWorkspace({
             </div>
           </div>
           <div className="card-body">
-            {!isDeviceActive && (
+            {!isScaleActive && (
               <div style={{ background: "#fff0f0", border: "1px solid #fecaca", borderRadius: 8, padding: "8px 12px", marginBottom: 12, color: "#991b1b", fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
                 <AlertTriangle size={15} style={{ flexShrink: 0 }} />
-                <span>Timbangan sedang <b>didiskoneksi secara manual</b>. Sinyal bridge dijeda. Klik <b>Aktivasi Timbangan</b> untuk menyambungkannya kembali.</span>
+                <span>Timbangan sedang <b>didiskoneksi secara manual</b>. Sinyal bridge diblokir. Klik tombol <b>Aktivasi Timbangan</b> untuk menyambungkannya kembali.</span>
               </div>
             )}
             <div className="summary-box">
@@ -570,14 +582,14 @@ export default function WeighingWorkspace({
               </div>
               <div className="summary-item">
                 <span>Berat dari Bridge</span>
-                <strong style={{ color: !isDeviceActive ? "#94a3b8" : bridgeOnline ? "var(--primary)" : undefined }}>
-                  {!isDeviceActive
-                    ? "NONAKTIF"
+                <strong style={{ color: !isScaleActive ? "#94a3b8" : bridgeOnline ? "var(--primary)" : undefined }}>
+                  {!isScaleActive
+                    ? "NONAKTIF (MANUAL)"
                     : serialReading?.weight_kg != null
                       ? `${new Intl.NumberFormat("id-ID").format(serialReading.weight_kg)} kg`
                       : "0 kg"}{" "}
                   <small style={{ fontSize: 11, fontWeight: 700, opacity: 0.8 }}>
-                    ({!isDeviceActive ? "MANUAL OFF" : serialReading?.stable ? "STABIL" : bridgeOnline ? "SIAP / AKTIF" : "BELUM ADA DATA"})
+                    ({!isScaleActive ? "NONAKTIF" : serialReading?.stable ? "STABIL" : bridgeOnline ? "SIAP / AKTIF" : "BELUM ADA DATA"})
                   </small>
                 </strong>
               </div>
@@ -590,7 +602,7 @@ export default function WeighingWorkspace({
               </div>
             </div>
 
-            {isDeviceActive && serialReading && serialReading.weight_kg > 0 && (
+            {isScaleActive && serialReading && serialReading.weight_kg > 0 && (
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
                 <span className="help">
                   String indikator terakhir: <code>{serialReading.indicator_raw || "-"}</code>
@@ -697,8 +709,8 @@ export default function WeighingWorkspace({
               <div>
                 <strong>{new Intl.NumberFormat("id-ID").format(displayedGross)}</strong>
                 <span>
-                  {!isDeviceActive
-                    ? "TIMBANGAN DIDISKONEKSI · KLIK AKTIVASI UNTUK MEMBACA BERAT"
+                  {!isScaleActive
+                    ? "TIMBANGAN NONAKTIF (MANUAL) · KLIK 'AKTIVASI TIMBANGAN' UNTUK MENGHUBUNGKAN"
                     : displayedGross > 0
                       ? activeSource === "SERIAL_BRIDGE" && serialReading?.weight_kg === displayedGross
                         ? (serialReading.stable ? "TIMBANGQR BRIDGE STABIL · KG" : "TIMBANGQR BRIDGE · KG")

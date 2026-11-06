@@ -39,6 +39,7 @@ export default function RemoteSerialStatusPanel() {
   const [device, setDevice] = useState<RemoteDevice | null>(null);
   const [serverLastSeen, setServerLastSeen] = useState<string | null>(null);
   const [serverBridgeOnline, setServerBridgeOnline] = useState(false);
+  const [isScaleActive, setIsScaleActive] = useState(true);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [toggling, setToggling] = useState(false);
@@ -51,10 +52,13 @@ export default function RemoteSerialStatusPanel() {
       const response = await fetch("/api/serial/latest", { cache: "no-store" });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Gagal membaca data timbangan dari Vercel.");
-      setReading(data.reading || null);
+      
+      const activeState = Boolean(data.active !== false && data.manuallyDisabled !== true);
+      setIsScaleActive(activeState);
+      setReading(activeState ? (data.reading || null) : null);
       setDevice(data.device || null);
-      setServerLastSeen(data.lastSeenAt || data.device?.last_seen_at || data.reading?.recorded_at || null);
-      setServerBridgeOnline(Boolean(data.bridgeOnline));
+      setServerLastSeen(activeState ? (data.lastSeenAt || data.device?.last_seen_at || data.reading?.recorded_at || null) : null);
+      setServerBridgeOnline(Boolean(activeState && data.bridgeOnline));
       setError("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Gagal membaca data timbangan dari Vercel.");
@@ -74,7 +78,16 @@ export default function RemoteSerialStatusPanel() {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Gagal mengubah status timbangan.");
-      setActionFeedback(data.message || (action === "connect" ? "Timbangan berhasil diaktifkan." : "Timbangan berhasil didiskoneksi."));
+      
+      const nextActive = action === "connect";
+      setIsScaleActive(nextActive);
+      if (!nextActive) {
+        setServerBridgeOnline(false);
+        setReading(null);
+      }
+      setActionFeedback(nextActive
+        ? "Timbangan berhasil diaktifkan kembali secara manual."
+        : "Timbangan berhasil dinonaktifkan secara manual. Status akan tetap nonaktif sampai diaktifkan manual.");
       await refresh(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Gagal mengubah status timbangan.");
@@ -100,19 +113,20 @@ export default function RemoteSerialStatusPanel() {
     };
   }, [refresh]);
 
-  const isDeviceActive = device ? device.active !== false : true;
-  const lastSeen = serverLastSeen || device?.last_seen_at || reading?.recorded_at || null;
+  const lastSeen = isScaleActive ? (serverLastSeen || device?.last_seen_at || reading?.recorded_at || null) : null;
   const isFresh = useMemo(() => {
-    if (!isDeviceActive) return false;
+    if (!isScaleActive) return false;
     if (serverBridgeOnline) return true;
     if (!lastSeen) return false;
     const timestamp = Date.parse(lastSeen);
     if (Number.isNaN(timestamp)) return false;
     return now - timestamp <= 15 * 60 * 1000;
-  }, [isDeviceActive, serverBridgeOnline, lastSeen, now]);
+  }, [isScaleActive, serverBridgeOnline, lastSeen, now]);
 
-  const weight = reading?.weight_kg;
-  const raw = reading?.indicator_raw || (isFresh ? "PING_TEST (Bridge Terhubung)" : "-");
+  const weight = isScaleActive ? reading?.weight_kg : null;
+  const raw = !isScaleActive
+    ? "TIMBANGAN DINONAKTIFKAN (MANUAL) · KLIK AKTIVASI UNTUK MENYAMBUNGKAN"
+    : reading?.indicator_raw || (isFresh ? "PING_TEST (Bridge Terhubung)" : "-");
   const deviceCode = device?.device_code || reading?.device_code || "TIMBANG-HJ-SERIAL-01";
   const portInfo = device?.port_name
     ? `${device.port_name} (${device.connection_type || "RS232"})`
@@ -126,8 +140,8 @@ export default function RemoteSerialStatusPanel() {
             <h2>Status Bridge cloud</h2>
             <p>Status berdasarkan data terbaru yang benar-benar sudah diterima Vercel dan tersimpan di PostgreSQL.</p>
           </div>
-          <span className={`badge ${!isDeviceActive ? "red" : isFresh ? "green" : "orange"}`}>
-            <span className="dot" /> {!isDeviceActive ? "Timbangan dinonaktifkan" : isFresh ? "Bridge online" : (reading || device?.last_seen_at) ? "Menunggu sinyal baru" : "Belum ada data"}
+          <span className={`badge ${!isScaleActive ? "red" : isFresh ? "green" : "orange"}`}>
+            <span className="dot" /> {!isScaleActive ? "Timbangan Dinonaktifkan (Manual)" : isFresh ? "Bridge online" : (reading || device?.last_seen_at) ? "Menunggu sinyal baru" : "Belum ada data"}
           </span>
         </div>
         <div className="card-body">
@@ -149,9 +163,9 @@ export default function RemoteSerialStatusPanel() {
 
           <div className="serial-actions" style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
             <button className="btn btn-secondary" type="button" onClick={() => void refresh()} disabled={loading || toggling}>
-              <RefreshCw size={16} /> Perbarui sekarang
+              <RefreshCw size={16} className={loading ? "spin" : ""} /> Perbarui sekarang
             </button>
-            {!isDeviceActive ? (
+            {!isScaleActive ? (
               <button
                 className="btn btn-primary"
                 type="button"
@@ -174,13 +188,13 @@ export default function RemoteSerialStatusPanel() {
             )}
           </div>
 
-          {!isDeviceActive && (
+          {!isScaleActive && (
             <div style={{ background: "#fff0f0", border: "1px solid #fecaca", borderRadius: 10, padding: "10px 14px", marginTop: 14, color: "#991b1b", fontSize: 13, display: "flex", alignItems: "flex-start", gap: 10 }}>
               <AlertTriangle size={18} style={{ flexShrink: 0, marginTop: 2 }} />
               <div>
-                <strong>Timbangan Dinonaktifkan (Manual)</strong>
+                <strong>Timbangan Dinonaktifkan Secara Manual</strong>
                 <div style={{ marginTop: 2, color: "#7f1d1d" }}>
-                  Sinyal dari TimbangQR Bridge dijeda dan tidak diterima oleh server Vercel. Klik tombol <b>Aktivasi Timbangan</b> di atas saat jembatan timbang siap digunakan kembali.
+                  Sinyal dari TimbangQR Bridge diblokir dan tidak diterima oleh server Vercel. Status ini <b>akan tetap nonaktif</b> sampai Anda secara manual menekan tombol <b>Aktivasi Timbangan</b> di atas.
                 </div>
               </div>
             </div>
@@ -204,11 +218,11 @@ export default function RemoteSerialStatusPanel() {
         <div className="card-body">
           <div className="weight-display compact-weight">
             <div>
-              <strong style={{ color: !isDeviceActive ? "#94a3b8" : undefined }}>
-                {!isDeviceActive ? "0" : weight == null ? "0" : new Intl.NumberFormat("id-ID").format(weight)}
+              <strong style={{ color: !isScaleActive ? "#94a3b8" : undefined }}>
+                {!isScaleActive ? "0" : weight == null ? "0" : new Intl.NumberFormat("id-ID").format(weight)}
               </strong>
               <span>
-                {!isDeviceActive
+                {!isScaleActive
                   ? "TIMBANGAN DINONAKTIFKAN (MANUAL)"
                   : reading?.stable
                     ? "BERAT STABIL · KG"
@@ -221,10 +235,10 @@ export default function RemoteSerialStatusPanel() {
           <div className="field">
             <label>String mentah indikator</label>
             <div className="code serial-raw">
-              {!isDeviceActive ? "TIMBANGAN DINONAKTIFKAN · KLIK AKTIVASI UNTUK MENYAMBUNGKAN" : raw}
+              {raw}
             </div>
           </div>
-          <div className="help">Timestamp pembacaan: {dateTime(reading?.recorded_at || lastSeen)}</div>
+          <div className="help">Timestamp pembacaan: {!isScaleActive ? "-" : dateTime(reading?.recorded_at || lastSeen)}</div>
         </div>
       </article>
     </div>
