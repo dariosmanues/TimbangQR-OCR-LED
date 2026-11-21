@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AlertTriangle,
   ArrowLeft,
   ArrowRight,
   Cable,
@@ -9,6 +10,8 @@ import {
   CheckCircle2,
   Cloud,
   Layers,
+  Power,
+  PowerOff,
   QrCode,
   RefreshCw,
   Save,
@@ -102,8 +105,11 @@ export default function WeighingWorkspace({
   const [bridgeLastSeen, setBridgeLastSeen] = useState<string | null>(null);
   const [bridgeOnline, setBridgeOnline] = useState(false);
   const [loadingBridge, setLoadingBridge] = useState(false);
+  const [togglingBridge, setTogglingBridge] = useState(false);
   const [activeSource, setActiveSource] = useState<"SERIAL_BRIDGE" | "OCR_LED">("SERIAL_BRIDGE");
   const lastAppliedReadingIdRef = useRef<number | null>(null);
+
+  const [isScaleActive, setIsScaleActive] = useState(true);
 
   const [lpsId, setLpsId] = useState("");
   const [driverName, setDriverName] = useState("");
@@ -122,18 +128,21 @@ export default function WeighingWorkspace({
       const response = await fetch("/api/serial/latest", { cache: "no-store" });
       if (!response.ok) return;
       const data = await response.json();
-      const nextReading = (data.reading || null) as SerialBridgeReading | null;
+      const activeState = Boolean(data.active !== false && data.manuallyDisabled !== true);
+      setIsScaleActive(activeState);
+
       const nextDevice = (data.device || null) as SerialBridgeDevice | null;
-      const lastSeen = data.lastSeenAt || nextDevice?.last_seen_at || nextReading?.recorded_at || null;
-      const isOnline = Boolean(
-        data.bridgeOnline ||
-          (lastSeen && !Number.isNaN(Date.parse(lastSeen)) && Date.now() - Date.parse(lastSeen) <= 15 * 60 * 1000)
-      );
+      const nextReading = activeState ? ((data.reading || null) as SerialBridgeReading | null) : null;
+      const isOnline = Boolean(activeState && data.bridgeOnline);
+      const lastSeen = activeState ? (data.lastSeenAt || nextDevice?.last_seen_at || nextReading?.recorded_at || null) : null;
 
       setSerialReading(nextReading);
-      setSerialDevice(nextDevice);
+      setSerialDevice(nextDevice ? { ...nextDevice, active: activeState } : null);
       setBridgeLastSeen(lastSeen);
       setBridgeOnline(isOnline);
+
+      // JIKA TIMBANGAN DINONAKTIFKAN, JANGAN PERNAH OTOMATIS TARIK BERAT DARI BRIDGE!
+      if (!activeState) return;
 
       if (nextReading && nextReading.weight_kg > 0) {
         const isRecentReading =
@@ -141,10 +150,10 @@ export default function WeighingWorkspace({
           Date.now() - Date.parse(nextReading.recorded_at) <= 10 * 60 * 1000;
         const isNewReading = lastAppliedReadingIdRef.current !== nextReading.id;
 
-        if (isRecentReading && isNewReading) {
-          lastAppliedReadingIdRef.current = nextReading.id;
+        if (isRecentReading) {
           setGrossKg((prev) => {
-            if (!prev || nextReading.stable || isNewReading) {
+            if (!prev || isNewReading) {
+              lastAppliedReadingIdRef.current = nextReading.id;
               setActiveSource("SERIAL_BRIDGE");
               return String(nextReading.weight_kg);
             }
@@ -159,12 +168,53 @@ export default function WeighingWorkspace({
     }
   }, []);
 
+  const handleToggleBridge = useCallback(async (action: "connect" | "disconnect") => {
+    setTogglingBridge(true);
+    try {
+      const response = await fetch("/api/serial/control", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, device_code: serialDevice?.device_code }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Gagal mengubah status timbangan.");
+      
+      const nextActive = action === "connect";
+      setIsScaleActive(nextActive);
+      if (!nextActive) {
+        setBridgeOnline(false);
+        setSerialReading(null);
+      }
+      setMessage(nextActive
+        ? "✓ Timbangan berhasil diaktifkan secara manual."
+        : "✓ Timbangan dinonaktifkan secara manual. Status akan tetap nonaktif sampai diaktifkan manual.");
+      await refreshBridge(false);
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Gagal mengubah status timbangan.");
+    } finally {
+      setTogglingBridge(false);
+    }
+  }, [serialDevice?.device_code, refreshBridge]);
+
   useEffect(() => {
     const initial = window.setTimeout(() => void refreshBridge(false), 0);
-    const interval = window.setInterval(() => void refreshBridge(true), 1500);
+    // Polling setiap 3 detik (hemat CPU Vercel hingga 50%), otomatis jeda jika tab browser diminimize/di latar belakang
+    const interval = window.setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      void refreshBridge(true);
+    }, 3000);
+
+    const onVisibilityChange = () => {
+      if (!document.hidden) {
+        void refreshBridge(false);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
     return () => {
       window.clearTimeout(initial);
       window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [refreshBridge]);
 
@@ -203,7 +253,7 @@ export default function WeighingWorkspace({
           ? "QR LPS berhasil diverifikasi. Master armada baru terdaftar; pastikan jenis armada dan isi tare sebelum menyimpan."
           : "QR LPS berhasil diverifikasi. Armada, LPS dan pengemudi tersambung.")
         : parsed.source === "ARMADA"
-          ? "QR Armada Air Hitam dikenali. Nomor polisi dan LPS terhubung; lengkapi pengemudi serta tare jika belum tersedia."
+          ? "QR Armada Harapan Jaya dikenali. Nomor polisi dan LPS terhubung; lengkapi pengemudi serta tare jika belum tersedia."
           : "✓ Data armada ditemukan & valid.");
     } catch (error) {
       setPayload(null);
@@ -259,7 +309,6 @@ export default function WeighingWorkspace({
 
   async function performSave(overrideGross?: number, overrideSource?: "SERIAL_BRIDGE" | "OCR_LED") {
     if (isSubmittingRef.current || saving) {
-      console.warn("[WeighingWorkspace] Double submit prevented: submission already in progress.");
       return;
     }
     if (!payload) {
@@ -342,25 +391,23 @@ export default function WeighingWorkspace({
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Transaksi gagal disimpan");
     } finally {
+      isSubmittingRef.current = false;
       setSaving(false);
-      setTimeout(() => {
-        isSubmittingRef.current = false;
-      }, 1500);
     }
   }
 
   async function save(event: React.FormEvent) {
     event.preventDefault();
-    if (isSubmittingRef.current || saving) return;
     await performSave();
   }
 
-  const useStepView = isMobileMode && mobileWizardMode;
   const displayedGross = Number(grossKg) || serialReading?.weight_kg || ocrReading?.weightKg || 0;
   const deviceCode = serialDevice?.device_code || serialReading?.device_code || "TIMBANG-HJ-SERIAL-01";
   const portLabel = serialDevice?.port_name
     ? `${serialDevice.port_name} · ${serialDevice.connection_type || "RS232"}`
     : `RS232 / RS485`;
+
+  const useStepView = isMobileMode && mobileWizardMode;
 
   return (
     <div>
@@ -478,29 +525,59 @@ export default function WeighingWorkspace({
 
       <div className="scan-layout">
         {/* PANEL STATUS TIMBANGQR BRIDGE (RS232/RS485) */}
-        <div className="card weighing-data-card">
+        <div
+          className="card weighing-data-card"
+          style={{ display: !useStepView || mobileStep === 2 || mobileStep === 3 ? "block" : "none" }}
+        >
           <div className="card-head">
             <div>
               <h2>Koneksi TimbangQR Bridge (Indikator RS232 / RS485)</h2>
               <p>Terhubung otomatis dengan aplikasi TimbangQR Bridge di PC Operator untuk menerima berat indikator secara langsung.</p>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <span className={`badge ${bridgeOnline ? "green" : "orange"}`}>
+              <span className={`badge ${!isScaleActive ? "red" : bridgeOnline ? "green" : "orange"}`}>
                 <span className="dot" />
-                {bridgeOnline ? "TimbangQR Bridge Online" : "Menunggu Sinyal Bridge"}
+                {!isScaleActive ? "Timbangan Nonaktif (Manual)" : bridgeOnline ? "TimbangQR Bridge Online" : "Menunggu Sinyal Bridge"}
               </span>
               <button
                 type="button"
                 className="btn btn-secondary"
                 style={{ padding: "6px 12px", minHeight: 34, fontSize: 12 }}
                 onClick={() => void refreshBridge(false)}
-                disabled={loadingBridge}
+                disabled={loadingBridge || togglingBridge}
               >
-                <RefreshCw size={14} /> {loadingBridge ? "Memuat..." : "Segarkan Bridge"}
+                <RefreshCw size={14} className={loadingBridge ? "spin" : ""} /> {loadingBridge ? "Memuat..." : "Segarkan"}
               </button>
+              {!isScaleActive ? (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  style={{ padding: "6px 12px", minHeight: 34, fontSize: 12, background: "#08784f", borderColor: "#08784f", color: "#fff" }}
+                  onClick={() => void handleToggleBridge("connect")}
+                  disabled={togglingBridge}
+                >
+                  <Power size={14} /> {togglingBridge ? "Mengaktifkan..." : "Aktivasi Timbangan"}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn-danger"
+                  style={{ padding: "6px 12px", minHeight: 34, fontSize: 12, borderColor: "#fca5a5" }}
+                  onClick={() => void handleToggleBridge("disconnect")}
+                  disabled={togglingBridge}
+                >
+                  <PowerOff size={14} /> {togglingBridge ? "Memproses..." : "Diskoneksi Timbangan"}
+                </button>
+              )}
             </div>
           </div>
           <div className="card-body">
+            {!isScaleActive && (
+              <div style={{ background: "#fff0f0", border: "1px solid #fecaca", borderRadius: 8, padding: "8px 12px", marginBottom: 12, color: "#991b1b", fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
+                <AlertTriangle size={15} style={{ flexShrink: 0 }} />
+                <span>Timbangan sedang <b>didiskoneksi secara manual</b>. Sinyal bridge diblokir. Klik tombol <b>Aktivasi Timbangan</b> untuk menyambungkannya kembali.</span>
+              </div>
+            )}
             <div className="summary-box">
               <div className="summary-item">
                 <span>Perangkat & Port</span>
@@ -511,12 +588,14 @@ export default function WeighingWorkspace({
               </div>
               <div className="summary-item">
                 <span>Berat dari Bridge</span>
-                <strong style={{ color: bridgeOnline ? "var(--primary)" : undefined }}>
-                  {serialReading?.weight_kg != null
-                    ? `${new Intl.NumberFormat("id-ID").format(serialReading.weight_kg)} kg`
-                    : "0 kg"}{" "}
+                <strong style={{ color: !isScaleActive ? "#94a3b8" : bridgeOnline ? "var(--primary)" : undefined }}>
+                  {!isScaleActive
+                    ? "NONAKTIF (MANUAL)"
+                    : serialReading?.weight_kg != null
+                      ? `${new Intl.NumberFormat("id-ID").format(serialReading.weight_kg)} kg`
+                      : "0 kg"}{" "}
                   <small style={{ fontSize: 11, fontWeight: 700, opacity: 0.8 }}>
-                    ({serialReading?.stable ? "STABIL" : bridgeOnline ? "SIAP / AKTIF" : "BELUM ADA DATA"})
+                    ({!isScaleActive ? "NONAKTIF" : serialReading?.stable ? "STABIL" : bridgeOnline ? "SIAP / AKTIF" : "BELUM ADA DATA"})
                   </small>
                 </strong>
               </div>
@@ -529,7 +608,7 @@ export default function WeighingWorkspace({
               </div>
             </div>
 
-            {serialReading && serialReading.weight_kg > 0 && (
+            {isScaleActive && serialReading && serialReading.weight_kg > 0 && (
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
                 <span className="help">
                   String indikator terakhir: <code>{serialReading.indicator_raw || "-"}</code>
@@ -599,7 +678,6 @@ export default function WeighingWorkspace({
             onSaveWeight={
               payload && lpsId
                 ? (weightKg) => {
-                    if (isSubmittingRef.current || saving) return;
                     setActiveSource("OCR_LED");
                     setGrossKg(String(weightKg));
                     void performSave(weightKg, "OCR_LED");
@@ -637,13 +715,15 @@ export default function WeighingWorkspace({
               <div>
                 <strong>{new Intl.NumberFormat("id-ID").format(displayedGross)}</strong>
                 <span>
-                  {displayedGross > 0
-                    ? activeSource === "SERIAL_BRIDGE" && serialReading?.weight_kg === displayedGross
-                      ? (serialReading.stable ? "TIMBANGQR BRIDGE STABIL · KG" : "TIMBANGQR BRIDGE · KG")
-                      : (ocrReading?.stable ? "OCR LED STABIL · KG" : "GROSS TERKONFIRMASI · KG")
-                    : bridgeOnline
-                      ? "TIMBANGQR BRIDGE TERHUBUNG (0 KG) · MENUNGGU BEBAN TIMBANGAN"
-                      : "MENUNGGU BEBAN DARI TIMBANGQR BRIDGE / OCR LED · KG"}
+                  {!isScaleActive
+                    ? "TIMBANGAN NONAKTIF (MANUAL) · KLIK 'AKTIVASI TIMBANGAN' UNTUK MENGHUBUNGKAN"
+                    : displayedGross > 0
+                      ? activeSource === "SERIAL_BRIDGE" && serialReading?.weight_kg === displayedGross
+                        ? (serialReading.stable ? "TIMBANGQR BRIDGE STABIL · KG" : "TIMBANGQR BRIDGE · KG")
+                        : (ocrReading?.stable ? "OCR LED STABIL · KG" : "GROSS TERKONFIRMASI · KG")
+                      : bridgeOnline
+                        ? "TIMBANGQR BRIDGE TERHUBUNG (0 KG) · MENUNGGU BEBAN TIMBANGAN"
+                        : "MENUNGGU BEBAN DARI TIMBANGQR BRIDGE / OCR LED · KG"}
                 </span>
               </div>
             </div>
