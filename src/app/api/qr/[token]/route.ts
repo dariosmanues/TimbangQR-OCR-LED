@@ -49,7 +49,8 @@ export async function GET(request: Request, { params }: { params: Promise<{ toke
     /^QR-ARMADA-/i.test(rawToken) ||
     Boolean(parseLegacyArmadaQr(rawToken));
 
-  if (/^LPS-/i.test(rawToken) && !isMasterArmada) {
+  const isPermanentLpsQr = /^LPS-.*-PERMANEN$/i.test(rawToken);
+  if (/^LPS-/i.test(rawToken) && !isMasterArmada && !isPermanentLpsQr) {
     try {
       const burnedCheck = await dbOne<{ ticket_number: string; burned_at: string }>(`
         SELECT ticket_number, burned_at

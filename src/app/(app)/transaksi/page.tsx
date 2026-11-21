@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Filter, Search, Camera, Crown, Calendar, User } from "lucide-react";
+import { Filter, Search, Camera, Crown, Calendar, User, FileSpreadsheet, RotateCcw } from "lucide-react";
 import { getSession, canManageTransactions } from "@/lib/auth";
 import { getLpsList, listWeighings } from "@/lib/queries";
 import { dbQuery } from "@/lib/db";
@@ -14,18 +14,28 @@ export const dynamic = "force-dynamic";
 export default async function TransactionsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; month?: string; lps?: string }>;
+  searchParams: Promise<{
+    q?: string;
+    month?: string;
+    date?: string;
+    startDate?: string;
+    endDate?: string;
+    lps?: string;
+  }>;
 }) {
   const user = await getSession();
   const canManage = canManageTransactions(user);
 
   const params = await searchParams;
   const q = params.q || "";
+  const startDate = params.startDate || "";
+  const endDate = params.endDate || "";
+  const date = params.date || "";
   const month = params.month || "";
   const lps = params.lps || "";
 
   const [rows, lpsList, vehicles] = await Promise.all([
-    listWeighings({ search: q, month, lps, limit: 300 }),
+    listWeighings({ search: q, startDate, endDate, date, month, lps, limit: 300 }),
     getLpsList(),
     canManage
       ? dbQuery<TransactionFormVehicle>(`
@@ -36,6 +46,16 @@ export default async function TransactionsPage({
         `)
       : Promise.resolve([]),
   ]);
+
+  const exportParams = new URLSearchParams();
+  if (q) exportParams.set("q", q);
+  if (startDate) exportParams.set("startDate", startDate);
+  if (endDate) exportParams.set("endDate", endDate);
+  if (date) exportParams.set("date", date);
+  if (month) exportParams.set("month", month);
+  if (lps) exportParams.set("lps", lps);
+  const exportUrl = `/api/transaksi/export${exportParams.toString() ? `?${exportParams.toString()}` : ""}`;
+  const isFiltered = Boolean(q || startDate || endDate || date || month || lps);
 
   return (
     <>
@@ -80,12 +100,30 @@ export default async function TransactionsPage({
           </div>
           <h1>Transaksi penimbangan</h1>
           <p>
-            Menampilkan maksimal 300 data sesuai filter.
+            Menampilkan {rows.length} data sesuai filter (maksimal 300 di layar, unduh Excel untuk seluruh data).
             {canManage && " Anda memiliki akses untuk Tambah, Edit, dan Hapus data transaksi."}
           </p>
         </div>
 
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <a
+            className="btn btn-secondary"
+            href={exportUrl}
+            style={{
+              gap: 6,
+              color: "#0b7a50",
+              borderColor: "#86efac",
+              backgroundColor: "#f0fdf4",
+              fontWeight: 700,
+              textDecoration: "none",
+              display: "inline-flex",
+              alignItems: "center",
+            }}
+            title="Unduh seluruh data hasil filter ke file Excel (.xlsx)"
+          >
+            <FileSpreadsheet size={16} color="#0b7a50" />
+            <span>Unduh Excel</span>
+          </a>
           {canManage && (
             <TransactionCreateButton
               lpsOptions={lpsList}
@@ -100,13 +138,21 @@ export default async function TransactionsPage({
       </div>
 
       <form className="card card-body" method="get" style={{ marginBottom: 18 }}>
-        <div className="form-row">
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 14 }}>
           <div className="field">
             <label>Pencarian</label>
             <input className="input" name="q" defaultValue={q} placeholder="No. tiket, no. polisi, pengemudi..." />
           </div>
           <div className="field">
-            <label>Bulan</label>
+            <label>Dari Tanggal</label>
+            <input className="input" type="date" name="startDate" defaultValue={startDate} />
+          </div>
+          <div className="field">
+            <label>Sampai Tanggal</label>
+            <input className="input" type="date" name="endDate" defaultValue={endDate} />
+          </div>
+          <div className="field">
+            <label>Bulan (Pilihan Alternatif)</label>
             <input className="input" type="month" name="month" defaultValue={month} />
           </div>
           <div className="field">
@@ -116,9 +162,32 @@ export default async function TransactionsPage({
               {lpsList.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}
             </select>
           </div>
-          <div className="field" style={{ alignContent: "end" }}>
-            <button className="btn btn-secondary" type="submit"><Filter size={17} /> Terapkan filter</button>
-          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 10, marginTop: 14, justifyContent: "flex-end", alignItems: "center", flexWrap: "wrap" }}>
+          {isFiltered && (
+            <Link className="btn btn-secondary" href="/transaksi" style={{ gap: 6, textDecoration: "none" }} title="Reset semua filter">
+              <RotateCcw size={15} />
+              <span>Reset Filter</span>
+            </Link>
+          )}
+          <button className="btn btn-secondary" type="submit" style={{ gap: 6 }}>
+            <Filter size={16} />
+            <span>Terapkan filter</span>
+          </button>
+          <a
+            className="btn btn-primary"
+            href={exportUrl}
+            style={{
+              gap: 6,
+              textDecoration: "none",
+              display: "inline-flex",
+              alignItems: "center",
+            }}
+          >
+            <FileSpreadsheet size={16} />
+            <span>Unduh Excel</span>
+          </a>
         </div>
       </form>
 

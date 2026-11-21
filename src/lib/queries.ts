@@ -3,7 +3,7 @@ import { unstable_cache } from "next/cache";
 import type { AssignmentRow, VehicleRow, WeighingRow } from "./types";
 
 const appTimeZone = (process.env.APP_TIMEZONE || "Asia/Jakarta").trim();
-export const DATA_START_DATE = (process.env.DATA_START_DATE || "2026-10-01").trim();
+export const DATA_START_DATE = (process.env.DATA_START_DATE || "2026-10-12").trim();
 
 async function getDashboardDataUncached() {
   const latestMonthRow = await dbOne<{ month: string }>(`
@@ -110,7 +110,7 @@ export async function getDashboardData() {
 
 export async function listVehicles(
   search = "",
-  filter: "active" | "all" | "inactive" | "harapan_jaya" | "air_hitam" | "palas" = "active"
+  filter: "active" | "all" | "inactive" | "air_hitam" | "palas" | "harapan_jaya" = "active"
 ) {
   const term = `%${search.trim()}%`;
   return dbQuery<VehicleRow>(`
@@ -136,9 +136,9 @@ export async function listVehicles(
         $2 = 'all'
         OR ($2 = 'active' AND v.active = TRUE)
         OR ($2 = 'inactive' AND v.active = FALSE)
-        OR ($2 = 'harapan_jaya' AND v.lokasi_tps = 'HARAPAN JAYA' AND v.active = TRUE)
-        OR ($2 = 'air_hitam' AND v.lokasi_tps = 'AIR HITAM' AND v.active = TRUE)
-        OR ($2 = 'palas' AND v.lokasi_tps = 'PALAS' AND v.active = TRUE)
+        OR ($2 = 'air_hitam' AND v.lokasi_tps = 'AIR HITAM')
+        OR ($2 = 'palas' AND v.lokasi_tps = 'PALAS')
+        OR ($2 = 'harapan_jaya' AND v.lokasi_tps = 'HARAPAN JAYA')
       )
     GROUP BY v.id
     ORDER BY v.no_urut ASC NULLS LAST, v.code ASC
@@ -173,30 +173,90 @@ export async function getVehicle(id: number) {
 export async function listWeighings(filters: {
   search?: string;
   month?: string;
+  date?: string;
+  startDate?: string;
+  endDate?: string;
   lps?: string;
   limit?: number;
 }) {
-  const search = `%${filters.search?.trim() || ""}%`;
+  const search = filters.search?.trim() || "";
   const month = filters.month?.trim() || "";
+  const date = filters.date?.trim() || "";
+  const startDate = filters.startDate?.trim() || "";
+  const endDate = filters.endDate?.trim() || "";
   const lps = filters.lps?.trim() || "";
-  const limit = Math.min(Math.max(filters.limit || 100, 1), 500);
+  const limit = Math.min(Math.max(filters.limit || 100, 1), 10000);
+
+  const whereClauses: string[] = [];
+  const params: (string | number)[] = [];
+
+  if (search) {
+    params.push(`%${search}%`);
+    const idx = params.length;
+    whereClauses.push(
+      `(ticket_number ILIKE $${idx} OR plate_number ILIKE $${idx} OR driver_name ILIKE $${idx} OR lps_name ILIKE $${idx})`
+    );
+  }
+
+  if (lps) {
+    params.push(lps);
+    whereClauses.push(`lps_name = $${params.length}`);
+  }
+
+  if (startDate && endDate) {
+    params.push(startDate);
+    const sIdx = params.length;
+    params.push(endDate);
+    const eIdx = params.length;
+    params.push(appTimeZone);
+    const tzIdx = params.length;
+    whereClauses.push(`(timezone($${tzIdx}, weighed_at)::date BETWEEN $${sIdx}::date AND $${eIdx}::date)`);
+  } else if (startDate) {
+    params.push(startDate);
+    const sIdx = params.length;
+    params.push(appTimeZone);
+    const tzIdx = params.length;
+    whereClauses.push(`(timezone($${tzIdx}, weighed_at)::date >= $${sIdx}::date)`);
+  } else if (endDate) {
+    params.push(endDate);
+    const eIdx = params.length;
+    params.push(appTimeZone);
+    const tzIdx = params.length;
+    whereClauses.push(`(timezone($${tzIdx}, weighed_at)::date <= $${eIdx}::date)`);
+  } else if (date) {
+    params.push(date);
+    const dIdx = params.length;
+    params.push(appTimeZone);
+    const tzIdx = params.length;
+    whereClauses.push(`(timezone($${tzIdx}, weighed_at)::date = $${dIdx}::date)`);
+  } else if (month) {
+    params.push(month);
+    const mIdx = params.length;
+    params.push(appTimeZone);
+    const tzIdx = params.length;
+    whereClauses.push(`(to_char(timezone($${tzIdx}, weighed_at), 'YYYY-MM') = $${mIdx})`);
+  }
+
+  params.push(appTimeZone);
+  const tzIdx = params.length;
+  params.push(DATA_START_DATE);
+  const baseIdx = params.length;
+  whereClauses.push(`(timezone($${tzIdx}, weighed_at) >= ($${baseIdx}::text || ' 00:00:00')::timestamp)`);
+
+  params.push(limit);
+  const limitIdx = params.length;
+
+  const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
 
   return dbQuery<WeighingRow>(`
     SELECT id, ticket_number, weighed_at, plate_number, driver_name, lps_name,
       gross_kg, tare_kg, netto_1_kg, rafaksi_kg, netto_2_kg, ritasi, tare_source, status,
       vehicle_id, lps_id, vehicle_type, waste_type, source_note
     FROM weighings
-    WHERE ($1 = '%%'
-      OR ticket_number ILIKE $1
-      OR plate_number ILIKE $1
-      OR driver_name ILIKE $1
-      OR lps_name ILIKE $1)
-      AND ($2 = '' OR to_char(timezone($3, weighed_at), 'YYYY-MM') = $2)
-      AND ($4 = '' OR lps_name = $4)
-      AND timezone($3, weighed_at) >= ($5::text || ' 00:00:00')::timestamp
+    ${whereSql}
     ORDER BY weighed_at DESC, id DESC
-    LIMIT $6
-  `, [search, month, appTimeZone, lps, DATA_START_DATE, limit]);
+    LIMIT $${limitIdx}
+  `, params);
 }
 
 async function getLpsListUncached() {
@@ -220,20 +280,20 @@ export async function getVehicleCounts() {
     total: number;
     active: number;
     inactive: number;
-    harapanJaya: number;
     airHitam: number;
     palas: number;
+    harapanJaya: number;
   }>(`
     SELECT
       COUNT(*)::int AS total,
       COUNT(*) FILTER (WHERE active = TRUE)::int AS active,
       COUNT(*) FILTER (WHERE active = FALSE)::int AS inactive,
-      COUNT(*) FILTER (WHERE lokasi_tps = 'HARAPAN JAYA' AND active = TRUE)::int AS "harapanJaya",
-      COUNT(*) FILTER (WHERE lokasi_tps = 'AIR HITAM' AND active = TRUE)::int AS "airHitam",
-      COUNT(*) FILTER (WHERE lokasi_tps = 'PALAS' AND active = TRUE)::int AS "palas"
+      COUNT(*) FILTER (WHERE lokasi_tps = 'AIR HITAM')::int AS "airHitam",
+      COUNT(*) FILTER (WHERE lokasi_tps = 'PALAS')::int AS "palas",
+      COUNT(*) FILTER (WHERE lokasi_tps = 'HARAPAN JAYA')::int AS "harapanJaya"
     FROM vehicles
   `);
-  return row || { total: 0, active: 0, inactive: 0, harapanJaya: 0, airHitam: 0, palas: 0 };
+  return row || { total: 0, active: 0, inactive: 0, airHitam: 0, palas: 0, harapanJaya: 0 };
 }
 
 async function getDeviceListUncached() {

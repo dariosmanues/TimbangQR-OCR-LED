@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { getSession, isSuperAdmin } from "@/lib/auth";
+import { getSession, canManageTransactions } from "@/lib/auth";
 import { dbOne, withTransaction } from "@/lib/db";
 import { jakartaIsoNow } from "@/lib/utils";
 import { syncCompletedWeighingToLps } from "@/lib/lps-sync";
@@ -52,9 +52,9 @@ export async function POST(request: Request) {
     const input = schema.parse(await request.json());
 
     if (input.measurementSource === "MANUAL") {
-      if (!isSuperAdmin(user)) {
+      if (!canManageTransactions(user)) {
         return NextResponse.json(
-          { error: "Akses ditolak: Hanya Super Administrator yang diizinkan membuat transaksi manual." },
+          { error: "Akses ditolak: Hanya Master ADMIN yang dapat membuat transaksi manual." },
           { status: 403 }
         );
       }
@@ -82,6 +82,15 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Armada atau LPS tidak ditemukan." }, { status: 404 });
     }
 
+    if (!canManageTransactions(user)) {
+      if (!input.qrToken || !/^LPS-/i.test(input.qrToken.trim())) {
+        return NextResponse.json(
+          { error: "Transaksi ditolak: Seluruh armada wajib menggunakan QR Code LPS sekali pakai terbaru (QR Master Permanen telah dinonaktifkan)." },
+          { status: 400 }
+        );
+      }
+    }
+
     const netto1 = input.grossKg - input.tareKg;
     const netto2 = netto1 - input.rafaksiKg;
     if (netto2 <= 0) {
@@ -89,7 +98,64 @@ export async function POST(request: Request) {
     }
 
     const result = await withTransaction(async (client) => {
+      const cleanToken = input.qrToken?.trim() || null;
+      const isPermanentLpsQr = Boolean(cleanToken && /^LPS-.*-PERMANEN$/i.test(cleanToken));
+
+      // 1. CEK ANTI-DOUBLE SUBMIT PADA LEVEL DATABASE:
+      // A. Cek apakah QR Token sudah pernah di-burn / digunakan sebelumnya
+      if (cleanToken && !isPermanentLpsQr) {
+        const burnedCheck = await client.query<{ ticket_number: string; burned_at: string }>(`
+          SELECT ticket_number, burned_at FROM burned_qr_tokens WHERE qr_token = $1
+        `, [cleanToken]);
+        if (burnedCheck.rows.length > 0) {
+          throw new Error(
+            `Transaksi ditolak (Double-Submit): QR Code ini sudah pernah diproses pada tiket #${burnedCheck.rows[0].ticket_number}.`
+          );
+        }
+      }
+
+      // B. Cek apakah armada yang sama baru saja menimbang dengan bobot gross yang sama (< 30 detik)
+      const rapidCheck = await client.query<{ ticket_number: string }>(`
+        SELECT ticket_number FROM weighings
+        WHERE vehicle_id = $1 
+          AND gross_kg = $2 
+          AND created_at >= NOW() - INTERVAL '30 seconds'
+        ORDER BY created_at DESC
+        LIMIT 1
+      `, [vehicle.id, input.grossKg]);
+      if (rapidCheck.rows.length > 0) {
+        throw new Error(
+          `Transaksi ditolak (Double-Submit): Transaksi identik untuk armada ini baru saja tersimpan pada tiket #${rapidCheck.rows[0].ticket_number} (dalam 30 detik terakhir).`
+        );
+      }
+
+      // C. Kunci token secara atomic di burned_qr_tokens sebelum generate nomor tiket
+      if (cleanToken && !isPermanentLpsQr) {
+        const burnLock = await client.query(`
+          INSERT INTO burned_qr_tokens (qr_token, plate_number, ticket_number, vehicle_id, burned_at)
+          VALUES ($1, $2, 'PENDING', $3, NOW())
+          ON CONFLICT (qr_token) DO NOTHING
+          RETURNING qr_token
+        `, [cleanToken, vehicle.plate_number, vehicle.id]);
+
+        if (burnLock.rowCount === 0) {
+          throw new Error(
+            `Transaksi dibatalkan (Double-Submit): QR Code ini sedang diproses oleh sesi lain secara bersamaan.`
+          );
+        }
+      }
+
       const ticket = await nextTicket(client);
+
+      // Definitifkan nomor tiket pada burned_qr_tokens
+      if (cleanToken && !isPermanentLpsQr) {
+        await client.query(`
+          UPDATE burned_qr_tokens 
+          SET ticket_number = $1 
+          WHERE qr_token = $2
+        `, [ticket, cleanToken]);
+      }
+
       const weighedAt = input.weighedAt && !isNaN(new Date(input.weighedAt).getTime())
         ? new Date(input.weighedAt).toISOString()
         : jakartaIsoNow();
@@ -139,35 +205,18 @@ export async function POST(request: Request) {
         source,
         sourceNote,
         user.id,
-        input.qrToken?.trim() || null,
+        cleanToken,
       ]);
       const id = inserted.rows[0].id;
 
-      // Catat token QR sebagai HANGUS agar tidak bisa discan/dipakai ulang
-      // PENTING: QR MASTER ARMADA bersifat PERMANEN dan TIDAK PERNAH DIHANGUSKAN!
-      // Hanya token slip sekali pakai LPS (berawalan LPS-) yang dicatat ke burned_qr_tokens.
-      const isMasterQr = !input.qrToken ||
-        /^ARMADA-/i.test(input.qrToken.trim()) ||
-        /^QR-ARMADA-/i.test(input.qrToken.trim()) ||
-        !input.qrToken.trim().toUpperCase().startsWith("LPS-");
-
-      if (input.qrToken && input.qrToken.trim() && !isMasterQr) {
-        try {
-          await client.query(`
-            INSERT INTO burned_qr_tokens (qr_token, plate_number, ticket_number, vehicle_id, burned_at)
-            VALUES ($1, $2, $3, $4, NOW())
-            ON CONFLICT (qr_token) DO UPDATE SET
-              ticket_number = EXCLUDED.ticket_number,
-              burned_at = NOW()
-          `, [input.qrToken.trim(), vehicle.plate_number, ticket, vehicle.id]);
-        } catch (e) {
-          console.warn("[Weighings] Gagal mencatat burned_qr_tokens:", e);
-        }
-      }
+      const clientIp =
+        request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+        request.headers.get("x-real-ip")?.trim() ||
+        null;
 
       await client.query(`
-        INSERT INTO audit_logs (user_id, action, entity_type, entity_id, new_data)
-        VALUES ($1, 'CREATE', 'WEIGHING', $2, $3::jsonb)
+        INSERT INTO audit_logs (user_id, action, entity_type, entity_id, new_data, ip_address)
+        VALUES ($1, 'CREATE', 'WEIGHING', $2, $3::jsonb, $4)
       `, [user.id, id, JSON.stringify({
         ticket,
         vehicleId: vehicle.id,
@@ -178,7 +227,8 @@ export async function POST(request: Request) {
         measurementSource: input.measurementSource,
         deviceId: input.deviceId || null,
         qrToken: input.qrToken || null,
-      })]);
+        clientIp,
+      }), clientIp]);
 
       return { id, ticket, netto2, weighedAt };
     });
@@ -187,7 +237,7 @@ export async function POST(request: Request) {
       ticketNumber: result.ticket,
       plateNumber: vehicle.plate_number,
       lpsName: lps.name,
-      transdepo: process.env.LPS_TRANSDEPO || "HARAPAN_JAYA",
+      transdepo: process.env.LPS_TRANSDEPO || "AIR_HITAM",
       weighedAt: result.weighedAt,
       grossKg: input.grossKg,
       tareKg: input.tareKg,

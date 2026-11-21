@@ -65,6 +65,14 @@ interface CachedVehicleRow {
   kelurahan_lps: string | null;
 }
 
+function cleanPermitNumber(val?: string | null): string | null {
+  if (!val) return null;
+  const trimmed = String(val).trim();
+  if (trimmed.replace(/[^A-Za-z0-9]/g, "").length < 4) return null;
+  if (/^(?:belum|tidak|none|null|kosong|-+)$/i.test(trimmed)) return null;
+  return trimmed;
+}
+
 function formatDateString(val: string | Date | null | undefined): string | null {
   if (!val) return null;
   if (typeof val === "string") return val.split("T")[0];
@@ -100,7 +108,7 @@ export async function POST(request: Request) {
     const results = await withTransaction(async (client) => {
       // 1. Ekstrak seluruh nomor plat, no izin, dan nama LPS secara massal
       const plates = Array.from(new Set(items.map((i) => normalizePlate(i.platNomor)).filter(Boolean)));
-      const izins = Array.from(new Set(items.map((i) => i.noIzinOperasi?.trim()).filter(Boolean))) as string[];
+      const izins = Array.from(new Set(items.map((i) => cleanPermitNumber(i.noIzinOperasi)).filter(Boolean))) as string[];
       const lpsNames = Array.from(new Set(items.map((i) => i.namaLps?.trim()).filter(Boolean))) as string[];
 
       // 2. Ambil master armada yang sudah ada dalam 1 query tunggal
@@ -118,8 +126,9 @@ export async function POST(request: Request) {
         if (!vehicleByPlate.has(row.plate_normalized)) {
           vehicleByPlate.set(row.plate_normalized, row);
         }
-        if (row.nomor_izin && !vehicleByIzin.has(row.nomor_izin)) {
-          vehicleByIzin.set(row.nomor_izin, row);
+        const cleanRowIzin = cleanPermitNumber(row.nomor_izin);
+        if (cleanRowIzin && !vehicleByIzin.has(cleanRowIzin)) {
+          vehicleByIzin.set(cleanRowIzin, row);
         }
       }
 
@@ -193,7 +202,9 @@ export async function POST(request: Request) {
         // 1. Nomor izin
         // 2. Jika nomor plat dipakai oleh multi-LPS (misal BM 9601 TZ di LPS Pesisir & LPS Rintis), cocokkan nama LPS / kelurahan
         // 3. Fallback ke nomor plat
-        let vehicleRow = item.noIzinOperasi ? vehicleByIzin.get(item.noIzinOperasi) : null;
+        const itemCleanIzin = cleanPermitNumber(item.noIzinOperasi);
+        const izinCandidate = itemCleanIzin ? vehicleByIzin.get(itemCleanIzin) : null;
+        let vehicleRow = (izinCandidate && izinCandidate.plate_normalized === plateNormalized) ? izinCandidate : null;
         if (!vehicleRow && (item.namaLps || kelurahanNama)) {
           const cleanItemLps = (item.namaLps || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
           const cleanItemKel = (kelurahanNama || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
@@ -266,7 +277,7 @@ export async function POST(request: Request) {
                 kelurahanNama,
                 kecamatanNama,
                 item.wilayahKerja || null,
-                item.noIzinOperasi || null,
+                cleanPermitNumber(item.noIzinOperasi),
                 item.nomorSkLps || null,
                 tglSk,
                 tglIzin,
@@ -298,7 +309,7 @@ export async function POST(request: Request) {
                 plateNormalized,
                 item.jenisArmada || "PICKUP",
                 qrToken,
-                item.noIzinOperasi || null,
+                cleanPermitNumber(item.noIzinOperasi),
                 item.nomorSkLps || null,
                 tglSk,
                 item.namaLps,
@@ -319,7 +330,7 @@ export async function POST(request: Request) {
               plate_number: plateNumber,
               plate_normalized: plateNormalized,
               active: true,
-              nomor_izin: item.noIzinOperasi || null,
+              nomor_izin: cleanPermitNumber(item.noIzinOperasi),
               qr_token: qrToken,
               nama_lps: item.namaLps || null,
               kelurahan_lps: kelurahanNama || null,

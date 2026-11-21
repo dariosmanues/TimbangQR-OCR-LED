@@ -80,6 +80,14 @@ export async function fetchVerifiedLpsArmada(identity: LpsIdentity): Promise<Lps
   return verifyLpsArmada(identity, body);
 }
 
+function cleanPermitNumber(val?: string | null): string | null {
+  if (!val) return null;
+  const trimmed = String(val).trim();
+  if (trimmed.replace(/[^A-Za-z0-9]/g, "").length < 4) return null;
+  if (/^(?:belum|tidak|none|null|kosong|-+)$/i.test(trimmed)) return null;
+  return trimmed;
+}
+
 function stableCode(prefix: string, value: string) {
   return prefix + createHash("sha256").update(value).digest("hex").slice(0, 18).toUpperCase();
 }
@@ -103,16 +111,21 @@ export async function linkVerifiedLpsArmada(armada: LpsArmada): Promise<Resolved
     // Cegah dua scan simultan membuat kendaraan/LPS yang sama secara paralel.
     await client.query("SELECT pg_advisory_xact_lock(417, hashtext($1))", [armada.normalizedPlate]);
 
+    const expectedCode = stableCode("LPS-ARM-", armada.id);
+    const validPermit = cleanPermitNumber(armada.noIzinOperasi);
+
     const vehicleRows = (await client.query<VehicleLookup>(
-      "SELECT id, code, plate_number, plate_normalized, vehicle_type, waste_type, default_tare_kg, qr_token, active, nama_lps, nomor_izin FROM vehicles WHERE plate_normalized = $1 ORDER BY active DESC, id LIMIT 10",
-      [armada.normalizedPlate],
+      "SELECT id, code, plate_number, plate_normalized, vehicle_type, waste_type, default_tare_kg, qr_token, active, nama_lps, nomor_izin FROM vehicles WHERE plate_normalized = $1 OR code = $2 ORDER BY CASE WHEN code = $2 THEN 0 ELSE 1 END, active DESC, id LIMIT 10",
+      [armada.normalizedPlate, expectedCode],
     )).rows;
-    let candidate: VehicleLookup | null = vehicleRows[0] || null;
-    if (vehicleRows.length > 1) {
+    // Prioritaskan kecocokan kode deterministik (code = LPS-ARM-<hash(id)>),
+    // lalu nomor izin yang valid (>= 4 karakter alfanumerik), lalu nama LPS.
+    let candidate: VehicleLookup | null = vehicleRows.find(v => v.code === expectedCode) || vehicleRows[0] || null;
+    if (!candidate || (vehicleRows.length > 1 && candidate.code !== expectedCode)) {
       const activeRows = vehicleRows.filter(v => v.active);
       const rowsToMatch = activeRows.length > 0 ? activeRows : vehicleRows;
-      const matchedPermit = armada.noIzinOperasi
-        ? rowsToMatch.filter(v => v.nomor_izin === armada.noIzinOperasi)
+      const matchedPermit = validPermit
+        ? rowsToMatch.filter(v => cleanPermitNumber(v.nomor_izin) === validPermit)
         : [];
       const matches = matchedPermit.length
         ? matchedPermit
@@ -131,33 +144,80 @@ export async function linkVerifiedLpsArmada(armada: LpsArmada): Promise<Resolved
       }
     }
 
-    // Jika armada aktif di LPS tetapi nonaktif di TimbangQR, aktifkan otomatis
-    // dan sinkronkan qr_token terbaru dari LPS agar selalu terdeteksi.
+    // Jika armada aktif di LPS tetapi nonaktif atau berubah plat/QR di TimbangQR,
+    // aktifkan otomatis dan sinkronkan plat serta qr_token terbaru dari LPS.
     if (candidate) {
-      if (!candidate.active || (armada.qrCode && candidate.qr_token !== armada.qrCode)) {
-        const conflict = armada.qrCode
-          ? (await client.query<{ id: number }>(
-              "SELECT id FROM vehicles WHERE qr_token = $1 AND id <> $2 LIMIT 1",
-              [armada.qrCode, candidate.id],
-            )).rows[0]
-          : null;
-        const nextQrToken = conflict ? candidate.qr_token : (armada.qrCode || candidate.qr_token);
-        await client.query(
-          "UPDATE vehicles SET active = TRUE, qr_token = $1 WHERE id = $2",
-          [nextQrToken, candidate.id],
+      const conflict = armada.qrCode
+        ? (await client.query<{ id: number }>(
+            "SELECT id FROM vehicles WHERE qr_token = $1 AND id <> $2 LIMIT 1",
+            [armada.qrCode, candidate.id],
+          )).rows[0]
+        : null;
+      const nextQrToken = conflict ? candidate.qr_token : (armada.qrCode || candidate.qr_token);
+      if (
+        !candidate.active ||
+        candidate.qr_token !== nextQrToken ||
+        candidate.plate_normalized !== armada.normalizedPlate ||
+        candidate.plate_number !== armada.platNomor
+      ) {
+        const updatedRows = await client.query<VehicleLookup>(
+          `UPDATE vehicles SET
+             active = TRUE,
+             qr_token = $1,
+             plate_number = $2,
+             plate_normalized = $3,
+             vehicle_type = COALESCE($4, vehicle_type),
+             nama_lps = COALESCE($5, nama_lps),
+             nomor_izin = $6,
+             updated_at = NOW()
+           WHERE id = $7
+           RETURNING id, code, plate_number, plate_normalized, vehicle_type, waste_type, default_tare_kg, qr_token, active, nama_lps, nomor_izin`,
+          [
+            nextQrToken,
+            armada.platNomor,
+            armada.normalizedPlate,
+            armada.jenisArmada || null,
+            armada.namaLps || null,
+            validPermit,
+            candidate.id,
+          ],
         );
-        candidate.active = true;
-        candidate.qr_token = nextQrToken;
+        if (updatedRows.rows[0]) {
+          candidate = updatedRows.rows[0];
+        } else {
+          candidate.active = true;
+          candidate.qr_token = nextQrToken;
+          candidate.plate_number = armada.platNomor;
+          candidate.plate_normalized = armada.normalizedPlate;
+        }
       }
     }
 
     let vehicle = candidate;
     let masterCreated = false;
     if (!vehicle) {
-      const code = stableCode("LPS-ARM-", armada.id);
+      const code = expectedCode;
+      const qrConflict = armada.qrCode
+        ? (await client.query<{ id: number }>(
+            "SELECT id FROM vehicles WHERE qr_token = $1 LIMIT 1",
+            [armada.qrCode],
+          )).rows[0]
+        : null;
+      const safeQrToken = qrConflict ? `${armada.qrCode}-${armada.normalizedPlate}` : armada.qrCode;
       const rows = await client.query<VehicleLookup>(
-        "INSERT INTO vehicles (code, plate_number, plate_normalized, vehicle_type, waste_type, default_tare_kg, qr_token, active, nama_lps, lokasi_tps, nomor_izin) VALUES ($1,$2,$3,$4,$5,NULL,$6,TRUE,$7,$8,$9) RETURNING id, code, plate_number, plate_normalized, vehicle_type, waste_type, default_tare_kg, qr_token, active, nama_lps, nomor_izin",
-        [code, armada.platNomor, armada.normalizedPlate, armada.jenisArmada || "BELUM DIISI", "SAMPAH RUMAH TANGGA", armada.qrCode, armada.namaLps, process.env.LPS_TRANSDEPO || "HARAPAN_JAYA", armada.noIzinOperasi],
+        `INSERT INTO vehicles (code, plate_number, plate_normalized, vehicle_type, waste_type, default_tare_kg, qr_token, active, nama_lps, lokasi_tps, nomor_izin)
+         VALUES ($1,$2,$3,$4,$5,NULL,$6,TRUE,$7,$8,$9)
+         ON CONFLICT (code) DO UPDATE SET
+           plate_number = EXCLUDED.plate_number,
+           plate_normalized = EXCLUDED.plate_normalized,
+           vehicle_type = COALESCE(EXCLUDED.vehicle_type, vehicles.vehicle_type),
+           qr_token = EXCLUDED.qr_token,
+           active = TRUE,
+           nama_lps = COALESCE(EXCLUDED.nama_lps, vehicles.nama_lps),
+           nomor_izin = EXCLUDED.nomor_izin,
+           updated_at = NOW()
+         RETURNING id, code, plate_number, plate_normalized, vehicle_type, waste_type, default_tare_kg, qr_token, active, nama_lps, nomor_izin`,
+        [code, armada.platNomor, armada.normalizedPlate, armada.jenisArmada || "BELUM DIISI", "SAMPAH RUMAH TANGGA", safeQrToken, armada.namaLps, process.env.LPS_TRANSDEPO || "HARAPAN_JAYA", validPermit],
       );
       vehicle = rows.rows[0];
       masterCreated = true;
