@@ -120,12 +120,25 @@ export default function WeighingWorkspace({
   const [scannedQrToken, setScannedQrToken] = useState("");
   const [saving, setSaving] = useState(false);
   const isSubmittingRef = useRef(false);
+  const grossKgRef = useRef("");
+  const payloadRef = useRef<VehiclePayload | null>(null);
   const [result, setResult] = useState<{ ticketNumber: string; netto2Kg: number } | null>(null);
+
+  useEffect(() => {
+    grossKgRef.current = grossKg;
+  }, [grossKg]);
+
+  useEffect(() => {
+    payloadRef.current = payload;
+  }, [payload]);
 
   const refreshBridge = useCallback(async (silent = false) => {
     if (!silent) setLoadingBridge(true);
     try {
-      const response = await fetch("/api/serial/latest", { cache: "no-store" });
+      const response = await fetch("/api/serial/latest", {
+        cache: "no-store",
+        credentials: "same-origin",
+      });
       if (!response.ok) return;
       const data = await response.json();
       const activeState = Boolean(data.active !== false && data.manuallyDisabled !== true);
@@ -145,20 +158,24 @@ export default function WeighingWorkspace({
       if (!activeState) return;
 
       if (nextReading && nextReading.weight_kg > 0) {
-        const isRecentReading =
-          !nextReading.recorded_at ||
-          Date.now() - Date.parse(nextReading.recorded_at) <= 10 * 60 * 1000;
+        const isRecentReading = Boolean(
+          isOnline ||
+            !nextReading.recorded_at ||
+            Math.abs(Date.now() - Date.parse(nextReading.recorded_at)) <= 15 * 60 * 1000
+        );
         const isNewReading = lastAppliedReadingIdRef.current !== nextReading.id;
 
-        if (isRecentReading) {
-          setGrossKg((prev) => {
-            if (!prev || isNewReading) {
-              lastAppliedReadingIdRef.current = nextReading.id;
-              setActiveSource("SERIAL_BRIDGE");
-              return String(nextReading.weight_kg);
-            }
-            return prev;
-          });
+        if (isRecentReading && (!grossKgRef.current || isNewReading)) {
+          lastAppliedReadingIdRef.current = nextReading.id;
+          grossKgRef.current = String(nextReading.weight_kg);
+          setActiveSource("SERIAL_BRIDGE");
+          setGrossKg(String(nextReading.weight_kg));
+        }
+      } else if (nextReading && nextReading.weight_kg === 0 && isOnline && !payloadRef.current) {
+        if (lastAppliedReadingIdRef.current !== nextReading.id) {
+          lastAppliedReadingIdRef.current = nextReading.id;
+          grossKgRef.current = "";
+          setGrossKg("");
         }
       }
     } catch {
@@ -315,7 +332,7 @@ export default function WeighingWorkspace({
       setMessage("Silakan pindai QR armada terlebih dahulu.");
       return;
     }
-    const currentGross = overrideGross ?? Number(grossKg);
+    const currentGross = overrideGross ?? (Number(grossKg) || serialReading?.weight_kg || 0);
     const currentTare = Number(tareKg || 0);
     const currentRafaksi = Number(rafaksiKg || 0);
     const netto1 = currentGross - currentTare;
@@ -376,7 +393,7 @@ export default function WeighingWorkspace({
         throw new Error(data.error || "Transaksi gagal disimpan");
       }
       const tokenUsed = scannedQrToken || token;
-      const isMaster = /^ARMADA-/i.test(tokenUsed) || !tokenUsed.toUpperCase().startsWith("LPS-");
+      const isMaster = /^ARMADA-/i.test(tokenUsed) || /^LPS-.*-PERMANEN$/i.test(tokenUsed) || !tokenUsed.toUpperCase().startsWith("LPS-");
       setResult({ ticketNumber: data.ticketNumber, netto2Kg: data.netto2Kg });
       setMessage(
         isMaster
@@ -386,7 +403,10 @@ export default function WeighingWorkspace({
       setScannedQrToken("");
       setToken("");
       setPayload(null);
+      payloadRef.current = null;
       setGrossKg("");
+      grossKgRef.current = "";
+      lastAppliedReadingIdRef.current = null;
       setRafaksiKg("0");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Transaksi gagal disimpan");

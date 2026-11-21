@@ -1,6 +1,9 @@
 import WeighingWorkspace from "@/components/WeighingWorkspace";
 import { requireUser, isSuperAdmin } from "@/lib/auth";
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 export default async function ScanPage({
   searchParams,
 }: {

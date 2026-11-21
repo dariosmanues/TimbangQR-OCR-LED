@@ -237,7 +237,7 @@ export async function POST(request: Request) {
       ticketNumber: result.ticket,
       plateNumber: vehicle.plate_number,
       lpsName: lps.name,
-      transdepo: process.env.LPS_TRANSDEPO || "AIR_HITAM",
+      transdepo: process.env.LPS_TRANSDEPO || "HARAPAN_JAYA",
       weighedAt: result.weighedAt,
       grossKg: input.grossKg,
       tareKg: input.tareKg,
@@ -261,6 +261,10 @@ export async function POST(request: Request) {
       lpsSync,
     }, { status: 201 });
   } catch (error) {
+    if (error instanceof z.ZodError) {
+      const details = error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
+      return NextResponse.json({ error: `Validasi data gagal (${details})` }, { status: 400 });
+    }
     return NextResponse.json({
       error: error instanceof Error ? error.message : "Data transaksi tidak valid.",
     }, { status: 400 });
