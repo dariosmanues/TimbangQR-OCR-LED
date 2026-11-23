@@ -49,7 +49,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ toke
     /^QR-ARMADA-/i.test(rawToken) ||
     Boolean(parseLegacyArmadaQr(rawToken));
 
-  const isPermanentLpsQr = /^LPS-.*-PERMANEN$/i.test(rawToken);
+  const isPermanentLpsQr = /^LPS-.*-PERMANEN$/i.test(rawToken) || /^SEWA-/i.test(rawToken);
   if (/^LPS-/i.test(rawToken) && !isMasterArmada && !isPermanentLpsQr) {
     try {
       const burnedCheck = await dbOne<{ ticket_number: string; burned_at: string }>(`
@@ -258,7 +258,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ toke
     vehicle,
     assignments,
     lpsOptions,
-    qrToken: rawToken,
+    qrToken: (/^SEWA-/i.test(vehicle.code || "") || /-PERMANEN$/i.test(vehicle.qr_token || "")) && vehicle.qr_token ? vehicle.qr_token : rawToken,
     source: "ARMADA",
   });
 }

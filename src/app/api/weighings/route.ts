@@ -66,11 +66,13 @@ export async function POST(request: Request) {
 
     const vehicle = await dbOne<{
       id: number;
+      code: string;
       plate_number: string;
       vehicle_type: string;
       waste_type: string;
+      qr_token: string | null;
     }>(`
-      SELECT id, plate_number, vehicle_type, waste_type
+      SELECT id, code, plate_number, vehicle_type, waste_type, qr_token
       FROM vehicles WHERE id = $1 AND active = TRUE
     `, [input.vehicleId]);
     const lps = await dbOne<{ id: number; name: string }>(
@@ -82,7 +84,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Armada atau LPS tidak ditemukan." }, { status: 404 });
     }
 
-    if (!canManageTransactions(user)) {
+    const isSewaVehicle = /^SEWA-/i.test(vehicle.code || "") || /-PERMANEN$/i.test(vehicle.qr_token || "");
+    if (!canManageTransactions(user) && !isSewaVehicle) {
       if (!input.qrToken || !/^LPS-/i.test(input.qrToken.trim())) {
         return NextResponse.json(
           { error: "Transaksi ditolak: Seluruh armada wajib menggunakan QR Code LPS sekali pakai terbaru (QR Master Permanen telah dinonaktifkan)." },
@@ -98,11 +101,13 @@ export async function POST(request: Request) {
     }
 
     const result = await withTransaction(async (client) => {
-      const cleanToken = input.qrToken?.trim() || null;
-      const isPermanentLpsQr = Boolean(cleanToken && /^LPS-.*-PERMANEN$/i.test(cleanToken));
+      const cleanToken = (isSewaVehicle && vehicle.qr_token ? vehicle.qr_token : input.qrToken?.trim()) || null;
+      const isPermanentLpsQr = Boolean(
+        isSewaVehicle || (cleanToken && (/^LPS-.*-PERMANEN$/i.test(cleanToken) || /^SEWA-/i.test(cleanToken)))
+      );
 
       // 1. CEK ANTI-DOUBLE SUBMIT PADA LEVEL DATABASE:
-      // A. Cek apakah QR Token sudah pernah di-burn / digunakan sebelumnya
+      // A. Cek apakah QR Token sudah pernah di-burn / digunakan sebelumnya (kecuali QR Permanen Sewa Pick Up)
       if (cleanToken && !isPermanentLpsQr) {
         const burnedCheck = await client.query<{ ticket_number: string; burned_at: string }>(`
           SELECT ticket_number, burned_at FROM burned_qr_tokens WHERE qr_token = $1
@@ -237,7 +242,7 @@ export async function POST(request: Request) {
       ticketNumber: result.ticket,
       plateNumber: vehicle.plate_number,
       lpsName: lps.name,
-      transdepo: process.env.LPS_TRANSDEPO || "HARAPAN_JAYA",
+      transdepo: process.env.LPS_TRANSDEPO || "AIR_HITAM",
       weighedAt: result.weighedAt,
       grossKg: input.grossKg,
       tareKg: input.tareKg,
@@ -261,10 +266,6 @@ export async function POST(request: Request) {
       lpsSync,
     }, { status: 201 });
   } catch (error) {
-    if (error instanceof z.ZodError) {
-      const details = error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
-      return NextResponse.json({ error: `Validasi data gagal (${details})` }, { status: 400 });
-    }
     return NextResponse.json({
       error: error instanceof Error ? error.message : "Data transaksi tidak valid.",
     }, { status: 400 });
